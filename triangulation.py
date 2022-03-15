@@ -15,7 +15,7 @@ class Segment:
     def __init__(self, v1: Vertex, v2: Vertex):
         self.v1 = v1
         self.v2 = v2
-    
+
     def ispt_rightside(self, pt) -> bool:
         """2つの節点を通る直線に対して入力点が右側にあるか判定
 
@@ -110,7 +110,7 @@ class Vertex:
         while True:
             triangles.append(curr_tri)
             iv = curr_tri.vertices.index(self)
-            curr_tri = curr_tri.neighs[(iv+2)%3]
+            curr_tri = curr_tri.neighs[(iv+2) % 3]
             if curr_tri == self.sample_triangle:
                 break
 
@@ -138,7 +138,7 @@ class Triangle:
     @v1.setter
     def v1(self, value: Triangle):
         self.vertices[0] = value
-    
+
     @property
     def v2(self):
         return self.vertices[1]
@@ -162,7 +162,7 @@ class Triangle:
     @n1.setter
     def n1(self, value: Triangle):
         self.neighs[0] = value
-    
+
     @property
     def n2(self):
         return self.neighs[1]
@@ -269,7 +269,7 @@ class Triangle:
         v_oppose = self.neighs[fi].vertices[(oppose_id + 2) % 3]
 
         cir = self.outer_circle()
-        
+
         return not(cir.ispoint_inside(v_oppose.point))
 
     def flip(self, fi: int):
@@ -399,7 +399,7 @@ class Polyloop:
         vertices_stack = self.vertices[:]  # List Copy
         for vi in vertices_stack:
             vi.sample_triangle = None
-        
+
         triangles = []
         while len(vertices_stack) > 2:
             for i, vi in enumerate(vertices_stack):
@@ -431,7 +431,7 @@ class Polyloop:
             if ti.is_delaun(fi):
                 continue
             face_stack.extend(ti.flip(fi))
-        
+
         # 境界の隣接関係を修復
         for tri in triangles:
             for i, vi in enumerate(tri.vertices):
@@ -442,12 +442,12 @@ class Polyloop:
                 if ni is None:
                     self.vertices[id].sample_triangle = tri
                     continue
-                ni.neighs[(ni.vertices.index(vi) + 2)%3] = tri
+                ni.neighs[(ni.vertices.index(vi) + 2) % 3] = tri
                 tri.neighs[i] = ni
-            
+
         return triangles
-    
-    def edges(self) ->List[Segment]:
+
+    def edges(self) -> List[Segment]:
         """PolyloopのすべてのエッジをSegmentのリストとする。
 
         Returns:
@@ -460,6 +460,7 @@ class Polyloop:
             v2 = self.vertices[(i+1) % vert_num]
             segments.append(Segment(v1, v2))
         return segments
+
 
 class Triangulation:
     """三角形メッシュ生成・データの格納
@@ -480,7 +481,7 @@ class Triangulation:
         self.vertices = [super_tri.v1, super_tri.v2, super_tri.v3]
         for vi in vertices:
             self.add_vertex(vi)
-        
+
         for li in outerloops:
             self.insert_loop(li)
 
@@ -553,7 +554,7 @@ class Triangulation:
 
         return Triangle(v1, v2, v3)
 
-    def extract_incident_triangles(self, seg:Segment) -> List[Triangle]:
+    def extract_incident_triangles(self, seg: Segment) -> List[Triangle]:
         """既存三角形分割からエッジを挿入した時に交差する三角形を抽出
 
         Args:
@@ -594,7 +595,7 @@ class Triangulation:
             incident_triangles.append(test_tri)
 
         return incident_triangles
-    
+
     def insert_edge(self, seg: Segment):
         """segmentを三角形分割に挿入
 
@@ -620,7 +621,7 @@ class Triangulation:
             for i in range(3):
                 v1 = tri.vertices[i]
                 v2 = tri.vertices[(i + 1)%3]
-                if (seg.v2 == v1 and seg.v1==v2):
+                if (seg.v2 == v1 and seg.v1 == v2):
                     tri1 = tri
                     ni1 = i
                     found_boundary = True
@@ -633,7 +634,7 @@ class Triangulation:
             for i in range(3):
                 v1 = tri.vertices[i]
                 v2 = tri.vertices[(i + 1)%3]
-                if (seg.v1 == v1 and seg.v2==v2):
+                if (seg.v1 == v1 and seg.v2 == v2):
                     tri2 = tri
                     ni2 = i
                     found_boundary = True
@@ -647,7 +648,7 @@ class Triangulation:
         seg.right_triangle = tri1
         seg.left_triangle = tri2
 
-    def insert_loop(self, loop:Polyloop):
+    def insert_loop(self, loop: Polyloop):
         """loopを三角形分割に挿入
 
         Args:
@@ -656,8 +657,8 @@ class Triangulation:
         for i, ei in enumerate(loop.edges()):
             self.insert_edge(ei)
             loop.neighs[i] = ei.right_triangle
-    
-    def extract_loopinside(self, loop:Polyloop) -> List[Triangle]:
+
+    def extract_loopinside(self, loop: Polyloop) -> List[Triangle]:
         """loopの内側の三角形を抽出してリストを返す。
 
         Args:
@@ -671,8 +672,8 @@ class Triangulation:
         for ti in remove_triangles:
             triangles.remove(ti)
         return triangles
-        
-    def extract_loopoutside(self, loop:Polyloop) -> List[Triangle]:
+
+    def extract_loopoutside(self, loop: Polyloop) -> List[Triangle]:
         """loopの外側の三角形を抽出してリストを返す。
 
         Args:
@@ -683,7 +684,7 @@ class Triangulation:
         """
         collect_triangles = [loop.neighs[0]]
         check_stack = [loop.neighs[0]]
-        
+
         while(check_stack):
             tgt = check_stack.pop()
             for i, ti in enumerate(tgt.neighs):
@@ -699,57 +700,18 @@ class Triangulation:
                 check_stack.append(ti)
         return collect_triangles
 
-    def show_result(self):
-        # デバック用の可視化メソッド
-        from matplotlib import pyplot as plt
-        from matplotlib import patches
+    def finite_triangles(self) -> List[Triangle]:
+        """包絡三角形を除いた三角形を得る。
 
-        fig, ax = plt.subplots(figsize=(6, 6))
+        Returns:
+            List[Triangle]: 包絡三角形を除いた三角形のリスト
+        """
+        triangles = []
+        for tri in self.triangles:
+            if any([self.vertices[0] in tri.vertices,
+                    self.vertices[1] in tri.vertices,
+                    self.vertices[2] in tri.vertices]):
+                continue
+            triangles.append(tri)
 
-        def motion(event):
-            try:
-                motion.patch_inside.set(facecolor='white')
-            except:
-                motion.patch_inside = None
-            
-            try:
-                for i in motion.patch_neighs:
-                    i.set(facecolor='white')
-                motion.patch_neighs = []
-            except:
-                motion.patch_neighs = []
-
-            x = event.xdata
-            y = event.ydata
-            tri = self.locate(Vertex(x, y))
-
-            # Located Triangle
-            points = [[vi.x, vi.y] for vi in tri.vertices]
-            motion.patch_inside = patches.Polygon(
-                xy=points, closed=True, facecolor="lightblue", edgecolor='black')
-            ax.add_patch(motion.patch_inside)
-            
-            # Neigher Triangle
-            for i, tri_i in enumerate(tri.neighs):
-                if tri_i is None:
-                    continue
-                points = [[vi.x, vi.y] for vi in tri_i.vertices]
-                patch = patches.Polygon(
-                    xy=points, closed=True, facecolor='green', edgecolor='black')
-                motion.patch_neighs.append(patch)
-                ax.add_patch(patch)
-
-            plt.draw()
-
-        print(f"triangles count: {len(self.triangles)}")
-        # patchs = []
-        for tri_i in self.triangles:
-            points = [[vi.x, vi.y] for vi in tri_i.vertices]
-            patch = patches.Polygon(
-                xy=points, closed=True, facecolor='white', edgecolor='black')
-            # patchs.append(patch)
-            ax.add_patch(patch)
-
-        ax.autoscale()
-        plt.connect('motion_notify_event', motion)
-        plt.show()
+        return triangles
