@@ -9,7 +9,6 @@ vertices = []
 for i in range(50):
     vertices.append(tr.Vertex(np.random.rand(), np.random.rand()))
 
-testseg = tr.Segment(*sample(vertices, 2))
 tess = tr.Triangulation(vertices)
 
 dh.plot_triangles(tess.finite_triangles())

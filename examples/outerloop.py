@@ -9,7 +9,7 @@ vertices = []
 for i in range(50):
     vertices.append(tr.Vertex(np.random.rand(), np.random.rand()))
 
-testseg = tr.Segment(*sample(vertices,2))
+testseg = tr.Segment(*sample(vertices, 2))
 v1 = tr.Vertex(0.1, 0.1)
 v2 = tr.Vertex(0.8, 0.1)
 v3 = tr.Vertex(0.5, 0.4)
