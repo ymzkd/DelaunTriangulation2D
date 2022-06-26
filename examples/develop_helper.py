@@ -78,7 +78,7 @@ def plot_triangulation(triangles: List[tr.Triangle]=[], segments=[], triangulate
     plt.show()
 
 
-def plot_triangles(triangles: List[tr.Triangle] = [], segments=[], circles=[]):
+def plot_triangles(triangles: List[tr.Triangle] = [], segments=[], circles=[], vertices=[]):
     from matplotlib import pyplot as plt
     from matplotlib import patches
     from matplotlib.collections import PatchCollection
@@ -88,15 +88,18 @@ def plot_triangles(triangles: List[tr.Triangle] = [], segments=[], circles=[]):
 
     # Plot Triangles
     triangle_patches = []
+    triangle_evaluations = []
     for tri_i in triangles:
         points = [[vi.x, vi.y] for vi in tri_i.vertices]
         patch = patches.Polygon(
             xy=points, closed=True, facecolor='lightgreen', edgecolor='black')
         triangle_patches.append(patch)
+        # triangle_evaluations.append(tri_i.edge_radius_ratio())
 
     pc = PatchCollection(triangle_patches, facecolor='lightgreen', edgecolor='black')
     colors = 100 * np.random.rand(len(triangle_patches))
     pc.set_array(np.array(colors))
+    # pc.set_array(triangle_evaluations)
     ax.add_collection(pc)
 
     # Plot Segments
@@ -115,9 +118,58 @@ def plot_triangles(triangles: List[tr.Triangle] = [], segments=[], circles=[]):
         patch = patches.Circle((ci.cx, ci.cy), radius=ci.r, fill=False, edgecolor='blue')
         ax.add_patch(patch)
 
+    # Plot Vertices
+    x_coords = []
+    y_coords = []
+    for vi in vertices:
+        x_coords.append(vi.x)
+        y_coords.append(vi.y)
+    ax.scatter(x_coords, y_coords)
+
     ax.autoscale()
     ax.set_aspect('equal')
+    # plt.colorbar(pc)
     plt.show()
+
+
+def plot_mesh(mesh: tr.Triangulation):
+    import pyvista as pv
+    # mesh points
+    points = []
+    for vi in mesh.vertices:
+        points.append([vi.x, vi.y, 0.0])
+    vertices = np.array(points)
+
+    # mesh faces
+    faces = []
+    for ti in mesh.triangles:
+        if ti.is_infinite():
+            continue
+        i1 = mesh.vertices.index(ti.v1)
+        i2 = mesh.vertices.index(ti.v2)
+        i3 = mesh.vertices.index(ti.v3)
+        faces.append([3,i1,i2,i3])
+    faces = np.hstack(faces)
+
+    surf = pv.PolyData(vertices, faces)
+    shrunk = surf.shrink(0.8)
+    # plot each face with a different color
+    # surf.plot(cpos=[-1, 1, 0.5], show_edges=True, color=True)
+    shrunk.plot(cpos=[0,0,1], show_edges=True, color=True, line_width=2.5)
+
+def triangulation_statics(tess: tr.Triangulation):
+    evaluates = []
+    for i in tess.triangles:
+        if i.is_infinite():
+            continue
+        evaluates.append(i.edge_radius_ratio())
+
+    evaluates = np.array(evaluates)
+    mean = evaluates.mean()
+    max = evaluates.max()
+    min = evaluates.min()
+    std = evaluates.std()
+    return {'mean': mean, 'max': max, 'min': min, 'std': std}
 
 def check_neigh_all(tess: tr.Triangulation):
     for tri_i in tess.triangles:

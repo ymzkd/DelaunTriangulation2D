@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-TOLERANCE = 0.000000000001
+TOLERANCE = 1.0e-12
 
 
 class Segment:
@@ -62,6 +62,21 @@ class Segment:
         """
         return Circle.create_from_segment(self)
 
+    def vertex_encroached(self, v: Vertex) -> bool:
+        """
+        頂点vがこの線分の直径円の中に位置するかどうか判定
+        Args:
+            v (Vertex): 判定対称の頂点
+
+        Returns:
+            (bool) 頂点vがこの線分の直径円の中に位置するか。
+        """
+        cir = self.diametric_ball()
+        if cir.ispoint_inside([v.x, v.y]):
+            return True
+
+        return False
+
     def encroached(self) -> bool:
         """
         線分が三角形分割のいずれかの節点とenchroachの関係にあるかを判定
@@ -72,11 +87,10 @@ class Segment:
         Notes:
             FIXME: encroachの探索が全探索なので隣接関係から探したほうが良さそう。
         """
-        cir = self.diametric_ball()
         for vi in self.mesh.vertices:
             if (vi is self.v1 or vi is self.v2):
                 continue
-            if cir.ispoint_inside([vi.x, vi.y]):
+            if self.vertex_encroached(vi):
                 return True
 
         return False
@@ -96,6 +110,9 @@ class Segment:
             else:
                 segments.append(seg)
         return segments
+
+    def length(self) -> float:
+        return self.v1.distance_to_vertex(self.v2)
 
 class Circle:
     """中心と半径で定義された円
@@ -131,11 +148,12 @@ class Vertex:
     """
     sample_triangle: Triangle
 
-    def __init__(self, x, y, mesh: Triangulation = None):
+    def __init__(self, x, y, mesh: Triangulation = None, infinite: bool = False):
         self.x = x
         self.y = y
         self.sample_triangle = None
         self.mesh = mesh
+        self.infinite = infinite
 
     @property
     def point(self):
@@ -238,6 +256,14 @@ class Triangle:
         self.neighs[2] = value
 
     def _get_edge_ends(self, id: int):
+        """
+        0, 1, 2というインデックスを入力して対応する辺の始点と終点を得る。
+        Args:
+            id: 三角形の各エッジに対応するインデックス(0～2)
+
+        Returns:
+            [i番目エッジ始点, i番目エッジ終点]: [Point, Point]
+        """
         if id == 0:
             return self.v1.point, self.v2.point
         elif id == 1:
@@ -370,6 +396,9 @@ class Triangle:
 
         return not(cir.ispoint_inside(v_oppose.point))
 
+    def is_infinite(self) -> bool:
+         return any([vi.infinite for vi in self.vertices])
+
     def flip(self, fi: int):
         """fi番目隣接三角形とエッジをFlipする。
 
@@ -419,7 +448,13 @@ class Triangle:
         v1.sample_triangle = self
         v3.sample_triangle = t_oppos
 
-        return [self, 1], [t_oppos, 2]
+        # DEBUG
+        if self.area() < TOLERANCE:
+            print("self area is zero(flip)", self.area())
+        if t_oppos.area() < TOLERANCE:
+            print("t_oppos area is zero(flip)", t_oppos.area())
+
+        return [self, 1], [t_oppos, 1], [self, 2], [t_oppos, 2]
 
     def outer_circle(self) -> Circle:
         """三角形の外接円を求める。
@@ -445,6 +480,15 @@ class Triangle:
         v12 = np.array([self.v2.x - self.v1.x, self.v2.y - self.v1.y])
         v13 = np.array([self.v3.x - self.v1.x, self.v3.y - self.v1.y])
         return np.cross(v12, v13) * 0.5
+
+    def edge_radius_ratio(self) -> float:
+        rad = self.outer_circle().r
+        edge_length = []
+        for i in range(3):
+            pt0, pt1 = self._get_edge_ends(0)
+            edge_length.append(np.linalg.norm(pt1 - pt0))
+        return np.min(edge_length) / rad
+
 
 class Polyloop:
     """頂点が時計回りに格納された多角形ループ
@@ -585,6 +629,9 @@ class Triangulation:
         super_tri.v2.mesh = self
         super_tri.v3.sample_triangle = super_tri
         super_tri.v3.mesh = self
+        super_tri.v1.infinite = True
+        super_tri.v2.infinite = True
+        super_tri.v3.infinite = True
         self.vertices = [super_tri.v1, super_tri.v2, super_tri.v3]
         for vi in vertices:
             self.add_vertex(vi)
@@ -592,6 +639,64 @@ class Triangulation:
             self.insert_edge(si)
         for li in outerloops:
             self.insert_loop(li)
+
+    @staticmethod
+    def createMesh(poly: Polyloop, p: float):
+        segments = poly.edges()
+        # step2
+        mesh = Triangulation(poly.vertices)
+        mesh.segments = segments
+
+        criteria_no = True
+        while(criteria_no):
+            # step3
+            print("subdivide segment")
+            for seg_i in mesh.segments:
+                subsegments = mesh.insert_segment(seg_i)
+                mesh.segments.remove(seg_i)
+                # DEBUG: Segment Length
+                for i in segments:
+                    if i.length() < TOLERANCE:
+                        raise Exception("Segment Length Zero")
+
+                mesh.segments.extend(subsegments)
+            print(f'segment count: {len(mesh.segments)}')
+
+            # step4
+            # check criteria
+            print("check angle criteria")
+            subdiv_triangles = []
+            for tri in mesh.triangles:
+                if tri.is_infinite():
+                    continue
+                if tri.edge_radius_ratio() > p:
+                    subdiv_triangles.append(tri)
+            criteria_no = (len(subdiv_triangles) > 0)
+
+            # execute subdivide
+            print(f'execute subdivide, {len(subdiv_triangles)}')
+            for tri in subdiv_triangles:
+            # while(subdiv_triangles):
+                tri = subdiv_triangles.pop()
+                cir = tri.outer_circle()
+                v = Vertex(cir.cx, cir.cy, mesh)
+
+                split_segment = False
+                for seg_i in mesh.segments:
+                    if seg_i.vertex_encroached(v):
+                        # print("v is encroached")
+                        subsegments = mesh.split_segment(seg_i)
+                        mesh.segments.remove(seg_i)
+                        mesh.segments.extend(subsegments)
+                        split_segment = True
+                        break
+
+                if split_segment:
+                    continue
+
+                mesh.add_vertex(v, tri)
+
+        return mesh, None, None
 
     def locate(self, v: Vertex) -> Triangle:
         """任意の点を含む三角形を探索する。
@@ -608,13 +713,13 @@ class Triangulation:
         else:
             raise Exception("No triangles include points.")
 
-    def add_vertex(self, v: Vertex) -> None:
+    def add_vertex(self, v: Vertex, checktri=None) -> None:
         """頂点vを挿入
 
         Args:
             v (Vertex): 挿入節点
         """
-        self.mesh = self
+        self.mesh = self # TODO: 意味をチェック
         tri = self.locate(v)
         self.vertices.append(v)
         div_triangles = tri.divide_triangle(v)
@@ -622,11 +727,20 @@ class Triangulation:
         tri_areas = [ti.area() for ti in div_triangles]
         min_id = np.argmin(tri_areas)
         if tri_areas[min_id] < TOLERANCE:
+            # print("DIVIDE EDGE")
             # エッジを分割
             # 隣接三角形の隣接関係を更新
             div_triangles, other = tri.split_edge(min_id, v)
+
+            for ti in div_triangles:
+                # DEBUG: Edge Splited Triangles Check
+                if ti.area() < TOLERANCE:
+                    print("self area is zero(DIVIDE EDGE)", ti.area())
+                    raise Exception("Edge Splited Triangles Area Zero")
+
             self.triangles.remove(other)
         else:
+            # print("DIVIDE TRIANGLE")
             # 三角形を分割
             # 隣接三角形の隣接関係を更新
             if tri.n1:
@@ -644,12 +758,18 @@ class Triangulation:
             tri.v2.sample_triangle = div_triangles[1]
             tri.v3.sample_triangle = div_triangles[2]
 
+            for ti in div_triangles:
+                # DEBUG
+                if ti.area() < TOLERANCE:
+                    print("self area is zero(DIVIDE TRIANGLE)", ti.area())
+
         self.triangles.extend(div_triangles)
         self.triangles.remove(tri)
 
         face_stack = [[ti, 1] for ti in div_triangles]
         while face_stack:
             ti, fi = face_stack.pop()
+            # print("Area(add_vertex): ", ti.area())
             if ti.neighs[fi] is None:
                 continue
             if ti.is_delaun(fi):
@@ -731,6 +851,18 @@ class Triangulation:
 
         return incident_triangles
 
+    def refinement(self, p: float = 1.5):
+        import copy
+        que = copy.copy(self.triangles)
+        while(que):
+            tri = que.pop()
+            if tri.is_infinite():
+                continue
+            if tri.edge_radius_ratio() > p:
+                cir = tri.outer_circle()
+                v = Vertex(cir.cx, cir.cy, self)
+                self.add_vertex(v)
+
     def insert_segment(self, seg: Segment) -> List[Segment]:
         seg.mesh = self
         seg_que = [seg]
@@ -738,6 +870,7 @@ class Triangulation:
         while(seg_que):
             seg_i = seg_que.pop()
             if seg_i.encroached():
+                print("segment splited (insert_segment)")
                 mid_pt = seg_i.midpt
                 self.add_vertex(mid_pt)
 
@@ -746,6 +879,13 @@ class Triangulation:
             else:
                 segments.append(seg_i)
         return segments
+
+    def split_segment(self, seg: Segment) -> List[Segment]:
+        mid_pt = seg.midpt
+        self.add_vertex(mid_pt)
+        seg1 = Segment(seg.v1, mid_pt, mesh=self)
+        seg2 = Segment(mid_pt, seg.v2, mesh=self)
+        return [seg1, seg2]
 
     def insert_edge(self, seg: Segment):
         """segmentを三角形分割に挿入

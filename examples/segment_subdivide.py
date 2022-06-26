@@ -18,3 +18,5 @@ subsegments =  tess.insert_segment(testseg)
 dh.plot_triangles(tess.finite_triangles(),
                   segments=subsegments,
                   circles=[si.diametric_ball() for si in subsegments])
+
+dh.plot_mesh(tess)
