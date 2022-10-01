@@ -641,14 +641,17 @@ class Triangulation:
             self.insert_loop(li)
 
     @staticmethod
-    def createMesh(poly: Polyloop, p: float):
+    def createMesh(poly: Polyloop, p: float, maxiter: int = 4):
         segments = poly.edges()
         # step2
         mesh = Triangulation(poly.vertices)
         mesh.segments = segments
 
         criteria_no = True
-        while(criteria_no):
+        iter_counter = 0
+        while(criteria_no and iter_counter < maxiter):
+            iter_counter += 1
+
             # step3
             print("subdivide segment")
             for seg_i in mesh.segments:
@@ -665,20 +668,24 @@ class Triangulation:
             # step4
             # check criteria
             print("check angle criteria")
-            subdiv_triangles = []
-            for tri in mesh.triangles:
-                if tri.is_infinite():
-                    continue
-                if tri.edge_radius_ratio() > p:
-                    subdiv_triangles.append(tri)
-            criteria_no = (len(subdiv_triangles) > 0)
+            # subdiv_triangles = []
+            # for tri in mesh.triangles:
+            #     if tri.is_infinite():
+            #         continue
+            #     if tri.edge_radius_ratio() > p:
+            #         subdiv_triangles.append(tri)
+            # criteria_no = (len(subdiv_triangles) > 0)
 
+            max_tri = max(mesh.finite_triangles(), key=lambda x: x.edge_radius_ratio())
+            criteria_no = (max_tri.edge_radius_ratio() > p)
             # execute subdivide
-            print(f'execute subdivide, {len(subdiv_triangles)}')
-            for tri in subdiv_triangles:
-            # while(subdiv_triangles):
-                tri = subdiv_triangles.pop()
-                cir = tri.outer_circle()
+            print('execute subdivide')
+            # for tri in subdiv_triangles:
+            while(criteria_no and iter_counter < maxiter):
+                iter_counter += 1
+                # tri = subdiv_triangles.pop()
+                cir = max_tri.outer_circle()
+                # print(f'add vertex {cir.cx}, {cir.cy}')
                 v = Vertex(cir.cx, cir.cy, mesh)
 
                 split_segment = False
@@ -694,8 +701,12 @@ class Triangulation:
                 if split_segment:
                     continue
 
-                mesh.add_vertex(v, tri)
+                mesh.add_vertex(v, max_tri)
 
+                max_tri = max(mesh.finite_triangles(), key=lambda x: x.edge_radius_ratio())
+                criteria_no = (max_tri.edge_radius_ratio() > p)
+
+            print("Criteria Done")
         return mesh, None, None
 
     def locate(self, v: Vertex) -> Triangle:
