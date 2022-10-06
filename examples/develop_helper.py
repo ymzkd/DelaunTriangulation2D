@@ -142,6 +142,7 @@ def plot_mesh(mesh: tr.Triangulation):
 
     # mesh faces
     faces = []
+    rad_edge_ratios = []
     for ti in mesh.triangles:
         if ti.is_infinite():
             continue
@@ -149,13 +150,14 @@ def plot_mesh(mesh: tr.Triangulation):
         i2 = mesh.vertices.index(ti.v2)
         i3 = mesh.vertices.index(ti.v3)
         faces.append([3,i1,i2,i3])
+        rad_edge_ratios.append(ti.edge_radius_ratio())
     faces = np.hstack(faces)
 
     surf = pv.PolyData(vertices, faces)
-    shrunk = surf.shrink(0.8)
+    shrunk = surf.shrink(0.9)
     # plot each face with a different color
     # surf.plot(cpos=[-1, 1, 0.5], show_edges=True, color=True)
-    shrunk.plot(cpos=[0,0,1], show_edges=True, color=True, line_width=2.5)
+    shrunk.plot(cpos=[0,0,1], scalars=np.array(rad_edge_ratios), show_edges=True, color=True, line_width=2.5)
 
 def triangulation_statics(tess: tr.Triangulation):
     evaluates = []

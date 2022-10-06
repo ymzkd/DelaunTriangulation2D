@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import math
+from enum import Enum
 from math import sqrt
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 import numpy as np
 
 TOLERANCE = 1.0e-12
 
+class SegmentPosition(Enum):
+    iend = 1
+    jend = 2
+    both = 3
 
 class Segment:
     """2つの節点を結ぶ線分
@@ -92,7 +98,6 @@ class Segment:
                 continue
             if self.vertex_encroached(vi):
                 return True
-
         return False
 
     def split_segment(self) -> List[Segment]:
@@ -113,6 +118,92 @@ class Segment:
 
     def length(self) -> float:
         return self.v1.distance_to_vertex(self.v2)
+
+    def pick_adjacent_vertex(self, other: Segment):
+        if self.v1 == other.v1 or self.v1 == other.v2:
+            return self.v1
+        elif self.v2 == other.v1 or self.v2 == other.v2:
+            return self.v2
+        else:
+            return None
+
+    def adjacent_segments(self, pos: SegmentPosition) -> float:
+        """
+        この線分に接続する線分を抽出
+        Args:
+            pos[SegmentPosition]: この線分のどちら側の節点の接続線分を抽出するか？
+
+        Returns:
+            この線分に接続する線分のリスト
+        """
+        if pos == SegmentPosition.iend:
+            tgt_vertex = self.v1
+        elif pos == SegmentPosition.jend:
+            tgt_vertex = self.v2
+
+        segments = []
+        for si in self.mesh.segments:
+            adj = (si.v1 == tgt_vertex or si.v2 == tgt_vertex)
+            if adj and self != si:
+                segments.append(si)
+        return segments
+
+    def adjacent_min_angle(self, pos: SegmentPosition) -> float:
+        segments = self.adjacent_segments(pos)
+        if len(segments) == 0:
+            return math.pi
+
+        pivot = self.v1 if pos == SegmentPosition.iend else self.v2
+        angles = [self.angle_segment(si, pivot) for si in segments]
+        return min(angles)
+
+    def direction_from_vertex(self, pivot: Vertex):
+        if self.v1 == pivot:
+            return np.array([self.v2.x - self.v1.x, self.v2.y - self.v1.y])
+        elif self.v2 == pivot:
+            return np.array([self.v1.x - self.v2.x, self.v1.y - self.v2.y])
+        else:
+            raise ValueError("argument 'pivot' must be equal to either node of the segment.")
+
+    def angle_segment(self, other: Segment, pivot: Vertex = None) -> float:
+        """
+        一端を共有する他の線分との交差角度
+        Args:
+            other: 交差する線分
+            pivot: 交差する節点、入力がない場合はメソッド内部で調べる
+
+        Returns:
+            線分同士の交差角度[rad: 0～pi]
+        """
+        if pivot is None:
+            pivot = self.pick_adjacent_vertex(other)
+
+        v1 = self.direction_from_vertex(pivot)
+        v2 = other.direction_from_vertex(pivot)
+        norm_product = v1 @ v2 / (np.linalg.norm(v1) * np.linalg.norm(v2))
+        if norm_product <= -1.0:
+            return math.pi
+        else:
+            return math.acos(norm_product)
+
+    def encroach_type(self) -> Union[SegmentPosition, None]:
+        """
+        この線分が他の線分といずれかの端部で鋭角を成すか、両端に鋭角を持つか、それ以外であるか
+        Returns:
+            それぞれの場合におけるSegmentPosition
+        """
+        border_angle = math.pi / 2
+        check_i = self.adjacent_min_angle(SegmentPosition.iend) < border_angle
+        check_j = self.adjacent_min_angle(SegmentPosition.jend) < border_angle
+        if check_i and check_j:
+            return SegmentPosition.both
+        elif check_i:
+            return SegmentPosition.iend
+        elif check_j:
+            return SegmentPosition.jend
+        else:
+            return None
+
 
 class Circle:
     """中心と半径で定義された円
@@ -485,9 +576,9 @@ class Triangle:
         rad = self.outer_circle().r
         edge_length = []
         for i in range(3):
-            pt0, pt1 = self._get_edge_ends(0)
+            pt0, pt1 = self._get_edge_ends(i)
             edge_length.append(np.linalg.norm(pt1 - pt0))
-        return np.min(edge_length) / rad
+        return rad / np.min(edge_length)
 
 
 class Polyloop:
@@ -640,73 +731,92 @@ class Triangulation:
         for li in outerloops:
             self.insert_loop(li)
 
+    def pick_encroach(self) -> Segment | None:
+        """
+        Meshに含まれるencroachしているエッジを調査
+        Returns:
+            Meshにencroachしているedgeが含まれる場合はそれを返し、
+            その他の場合はNoneを返す。
+        """
+        for seg_i in self.segments:
+            if seg_i.encroached():
+                return seg_i
+        return None
+
+    def resolve_encroach(self):
+        while e := self.pick_encroach():
+            segs = self.split_segment(e)
+            self.segments.remove(e)
+            self.segments.extend(segs)
+
+    def pick_poor_triangle(self, re_rate: float) -> Triangle | None:
+        """
+        指定したradius-edge比を満たしていない不良な三角形を抽出
+        Args:
+            re_rate: 不良と判断するradius-edge比のしきい値
+
+        Returns:
+            不良な三角形、見つからなかった場合はNoneを返す
+        """
+        for tri_i in self.triangles:
+            if not(tri_i.is_infinite()) and tri_i.edge_radius_ratio() > re_rate:
+                return tri_i
+        return None
+
+    def split_triangle(self, tri: Triangle):
+        c = tri.outer_circle()
+        v = Vertex(c.cx, c.cy, mesh=self)
+        for seg_i in self.segments:
+            # 追加点にencroachが見つかった場合はsegmentを処理
+            if seg_i.vertex_encroached(v):
+                segs = self.split_segment(seg_i)
+                self.segments.remove(seg_i)
+                self.segments.extend(segs)
+                self.resolve_encroach()
+                return
+
+        self.add_vertex(v)
+
+    def adjacent_segments(self, v: Vertex) -> List[Segment]:
+        """
+        節点vに接続される線分を抽出
+        Args:
+            v: 対象節点
+
+        Returns:
+            vに接続される線分のリスト
+        """
+        segments = []
+        for si in self.segments:
+            if si.v1 == v or si.v2 == v:
+                segments.append(si)
+        return segments
+
     @staticmethod
     def createMesh(poly: Polyloop, p: float, maxiter: int = 4):
         segments = poly.edges()
         # step2
         mesh = Triangulation(poly.vertices)
         mesh.segments = segments
+        for seg_i in mesh.segments:
+            seg_i.mesh = mesh
 
-        criteria_no = True
-        iter_counter = 0
-        while(criteria_no and iter_counter < maxiter):
-            iter_counter += 1
+        # step3
+        mesh.resolve_encroach()
 
-            # step3
-            print("subdivide segment")
-            for seg_i in mesh.segments:
-                subsegments = mesh.insert_segment(seg_i)
-                mesh.segments.remove(seg_i)
-                # DEBUG: Segment Length
-                for i in segments:
-                    if i.length() < TOLERANCE:
-                        raise Exception("Segment Length Zero")
+        # step4
+        count_iter = 0
+        while tri := mesh.pick_poor_triangle(p):
+            count_iter += 1
+            if count_iter > maxiter:
+                print("iteration reach max iteration.")
+                break
 
-                mesh.segments.extend(subsegments)
-            print(f'segment count: {len(mesh.segments)}')
+            if tri:
+                mesh.split_triangle(tri)
+            else:
+                break
 
-            # step4
-            # check criteria
-            print("check angle criteria")
-            # subdiv_triangles = []
-            # for tri in mesh.triangles:
-            #     if tri.is_infinite():
-            #         continue
-            #     if tri.edge_radius_ratio() > p:
-            #         subdiv_triangles.append(tri)
-            # criteria_no = (len(subdiv_triangles) > 0)
-
-            max_tri = max(mesh.finite_triangles(), key=lambda x: x.edge_radius_ratio())
-            criteria_no = (max_tri.edge_radius_ratio() > p)
-            # execute subdivide
-            print('execute subdivide')
-            # for tri in subdiv_triangles:
-            while(criteria_no and iter_counter < maxiter):
-                iter_counter += 1
-                # tri = subdiv_triangles.pop()
-                cir = max_tri.outer_circle()
-                # print(f'add vertex {cir.cx}, {cir.cy}')
-                v = Vertex(cir.cx, cir.cy, mesh)
-
-                split_segment = False
-                for seg_i in mesh.segments:
-                    if seg_i.vertex_encroached(v):
-                        # print("v is encroached")
-                        subsegments = mesh.split_segment(seg_i)
-                        mesh.segments.remove(seg_i)
-                        mesh.segments.extend(subsegments)
-                        split_segment = True
-                        break
-
-                if split_segment:
-                    continue
-
-                mesh.add_vertex(v, max_tri)
-
-                max_tri = max(mesh.finite_triangles(), key=lambda x: x.edge_radius_ratio())
-                criteria_no = (max_tri.edge_radius_ratio() > p)
-
-            print("Criteria Done")
         return mesh, None, None
 
     def locate(self, v: Vertex) -> Triangle:
@@ -892,7 +1002,39 @@ class Triangulation:
         return segments
 
     def split_segment(self, seg: Segment) -> List[Segment]:
-        mid_pt = seg.midpt
+        accute_pos = seg.encroach_type()
+        axisdir = np.array([seg.v2.x - seg.v1.x, seg.v2.y - seg.v1.y])
+        axisdir /= np.linalg.norm(axisdir)
+
+        if accute_pos == SegmentPosition.both:
+            i1 = int(math.floor(math.log(seg.length() / 2) / math.log(2.0)))
+            dl1 = 2.0 ** i1
+            vec = axisdir * dl1
+            pt1 = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
+
+            i2 = int(math.floor(math.log(seg.length() / 5) / math.log(2.0)))
+            dl2 = 2.0 ** i2
+            vec = axisdir * (seg.length() - dl2)
+            pt2 = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
+
+            self.add_vertex(pt1)
+            self.add_vertex(pt2)
+            seg1 = Segment(seg.v1, pt1, mesh=self)
+            seg2 = Segment(pt1, pt2, mesh=self)
+            seg3 = Segment(pt2, seg.v2, mesh=self)
+            return [seg1, seg2, seg3]
+
+        i = int(math.floor(math.log(seg.length() / 1.5) / math.log(2.0)))
+        dl = 2.0**i
+        if accute_pos is None:
+            mid_pt = seg.midpt
+        elif accute_pos == SegmentPosition.iend:
+            vec = axisdir * dl
+            mid_pt = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
+        elif accute_pos == SegmentPosition.jend:
+            vec = axisdir * (seg.length() - dl)
+            mid_pt = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
+
         self.add_vertex(mid_pt)
         seg1 = Segment(seg.v1, mid_pt, mesh=self)
         seg2 = Segment(mid_pt, seg.v2, mesh=self)
