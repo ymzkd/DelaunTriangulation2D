@@ -22,3 +22,7 @@ mesh, tri, vert = tr.Triangulation.createMesh(poly, 1.45, 20)
 
 # dh.plot_triangles(mesh.triangles, segments=mesh.segments, circles=[si.diametric_ball() for si in mesh.segments])
 dh.plot_mesh(mesh)
+
+for tri_i in mesh.triangles:
+    if tri_i.is_seditious():
+        print("find seditious triangle!!")

@@ -157,7 +157,7 @@ def plot_mesh(mesh: tr.Triangulation):
     shrunk = surf.shrink(0.9)
     # plot each face with a different color
     # surf.plot(cpos=[-1, 1, 0.5], show_edges=True, color=True)
-    shrunk.plot(cpos=[0,0,1], scalars=np.array(rad_edge_ratios), show_edges=True, color=True, line_width=2.5)
+    shrunk.plot(cpos=[[0,0,1],[0,0,0],[0,1,0]], scalars=np.array(rad_edge_ratios), show_edges=True, color=True, line_width=2.5, zoom='tight')
 
 def triangulation_statics(tess: tr.Triangulation):
     evaluates = []

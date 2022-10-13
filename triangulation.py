@@ -9,10 +9,12 @@ import numpy as np
 
 TOLERANCE = 1.0e-12
 
+
 class SegmentPosition(Enum):
     iend = 1
     jend = 2
     both = 3
+
 
 class Segment:
     """2つの節点を結ぶ線分
@@ -117,7 +119,7 @@ class Segment:
         return segments
 
     def length(self) -> float:
-        return self.v1.distance_to_vertex(self.v2)
+        return self.v1.distance(self.v2)
 
     def pick_adjacent_vertex(self, other: Segment):
         if self.v1 == other.v1 or self.v1 == other.v2:
@@ -149,6 +151,15 @@ class Segment:
         return segments
 
     def adjacent_min_angle(self, pos: SegmentPosition) -> float:
+        """
+        線分のi端/j端に交差する線分との最小角度を求める。
+        Args:
+            pos (SegmentPosition): i端/j端を指定する指定子
+
+        Returns:
+            float: 位置に応じた最小交差角度で、交差がない場合はPiを返す。
+
+        """
         segments = self.adjacent_segments(pos)
         if len(segments) == 0:
             return math.pi
@@ -157,7 +168,15 @@ class Segment:
         angles = [self.angle_segment(si, pivot) for si in segments]
         return min(angles)
 
-    def direction_from_vertex(self, pivot: Vertex):
+    def direction_from_pivot(self, pivot: Vertex):
+        """
+        線分の方向ベクトルを指定した一端から他の一端へのベクトルとして求める。
+        Args:
+            pivot (Vertex): 線分の一端の節点でpivotからの方向ベクトルを求める。
+
+        Returns:
+            np.array: 方向ベクトル
+        """
         if self.v1 == pivot:
             return np.array([self.v2.x - self.v1.x, self.v2.y - self.v1.y])
         elif self.v2 == pivot:
@@ -178,8 +197,8 @@ class Segment:
         if pivot is None:
             pivot = self.pick_adjacent_vertex(other)
 
-        v1 = self.direction_from_vertex(pivot)
-        v2 = other.direction_from_vertex(pivot)
+        v1 = self.direction_from_pivot(pivot)
+        v2 = other.direction_from_pivot(pivot)
         norm_product = v1 @ v2 / (np.linalg.norm(v1) * np.linalg.norm(v2))
         if norm_product <= -1.0:
             return math.pi
@@ -204,6 +223,15 @@ class Segment:
         else:
             return None
 
+    # @staticmethod
+    # def extract_byends(segments: List[Segment], vi: Vertex, vj: Vertex) -> Union[Segment, None]:
+    #     for seg_i in segments:
+    #         j1 = (seg_i.v1 == vi or seg_i.v2 == vi)
+    #         j2 = (seg_i.v1 == vj or seg_i.v2 == vj)
+    #         if j1 and j2:
+    #             return seg_i
+    #     return None
+
 
 class Circle:
     """中心と半径で定義された円
@@ -224,7 +252,7 @@ class Circle:
     def create_from_segment(seg:Segment):
         pt1 = seg.v1
         pt2 = seg.v2
-        r = pt1.distance_to_vertex(pt2) / 2
+        r = pt1.distance(pt2) / 2
         return Circle((pt1.x + pt2.x) / 2, (pt1.y + pt2.y) / 2, r)
 
 
@@ -250,7 +278,7 @@ class Vertex:
     def point(self):
         return np.array([self.x, self.y])
 
-    def distance_to_vertex(self, other: Vertex) -> float:
+    def distance(self, other: Vertex) -> float:
         """他の頂点までの距離
 
         Args:
@@ -294,9 +322,14 @@ class Triangle:
         neighs (List[Triangle]): メッシュ隣接要素の配列[n1, n2, n3]を返すproperty。
 
     """
-    def __init__(self, v1, v2, v3, n1=None, n2=None, n3=None):
+    vertices: List[Vertex]
+    neighs: List[Triangle]
+    mesh: Triangulation
+
+    def __init__(self, v1, v2, v3, n1=None, n2=None, n3=None, mesh: Triangulation = None):
         self.vertices = [v1, v2, v3]
         self.neighs = [n1, n2, n3]
+        self.mesh = mesh
 
     @property
     def v1(self):
@@ -346,18 +379,18 @@ class Triangle:
     def n3(self, value: Triangle):
         self.neighs[2] = value
 
-    def _get_edge_ends(self, id: int):
+    def _get_edge_ends(self, idx: int):
         """
         0, 1, 2というインデックスを入力して対応する辺の始点と終点を得る。
         Args:
-            id: 三角形の各エッジに対応するインデックス(0～2)
+            idx: 三角形の各エッジに対応するインデックス(0～2)
 
         Returns:
             [i番目エッジ始点, i番目エッジ終点]: [Point, Point]
         """
-        if id == 0:
+        if idx == 0:
             return self.v1.point, self.v2.point
-        elif id == 1:
+        elif idx == 1:
             return self.v2.point, self.v3.point
         else:
             return self.v3.point, self.v1.point
@@ -389,9 +422,9 @@ class Triangle:
         Returns:
             List[Triangle]: 頂点vを基準に分割された3つの三角形
         """
-        t1 = Triangle(v, self.v1, self.v2)
-        t2 = Triangle(v, self.v2, self.v3)
-        t3 = Triangle(v, self.v3, self.v1)
+        t1 = Triangle(v, self.v1, self.v2, mesh=self.mesh)
+        t2 = Triangle(v, self.v2, self.v3, mesh=self.mesh)
+        t3 = Triangle(v, self.v3, self.v1, mesh=self.mesh)
 
         t1.n1 = t3
         t1.n2 = self.n1
@@ -424,10 +457,10 @@ class Triangle:
         v3 = other.vertices[(ie_opp + 2)%3]
         v4 = self.vertices[(ie + 1)%3]
 
-        t1 = Triangle(v, v1, v2)
-        t2 = Triangle(v, v2, v3)
-        t3 = Triangle(v, v3, v4)
-        t4 = Triangle(v, v4, v1)
+        t1 = Triangle(v, v1, v2, mesh=self.mesh)
+        t2 = Triangle(v, v2, v3, mesh=self.mesh)
+        t3 = Triangle(v, v3, v4, mesh=self.mesh)
+        t4 = Triangle(v, v4, v1, mesh=self.mesh)
 
         v.sample_triangle = t1
         v1.sample_triangle = t1
@@ -580,6 +613,71 @@ class Triangle:
             edge_length.append(np.linalg.norm(pt1 - pt0))
         return rad / np.min(edge_length)
 
+    def corner_angle(self, idx: int) -> float:
+        """
+        入力idに基づいた三角形コーナーの角度(rad)を求める。
+        Args:
+            idx: 0～2のコーナーを示すインデックス
+
+        Returns:
+            コーナーの角度(rad)
+        """
+        v0 = self.vertices[idx]
+        v1 = self.vertices[(idx + 1) % 3]
+        v2 = self.vertices[(idx + 2) % 3]
+        vec1 = np.array([v1.x - v0.x, v1.y - v0.y])
+        vec2 = np.array([v2.x - v0.x, v2.y - v0.y])
+        cos_sita = vec1 @ vec2 / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        return math.acos(cos_sita)
+
+    def min_angle_index(self) -> int:
+        """
+        三角形の最小の角度を持つコーナーのインデックス
+        """
+        return np.argmin(self.corner_angle(i) for i in range(3))
+
+    def min_angle(self) -> float:
+        """
+        三角形のコーナーの最小の角度(rad)
+        """
+        return np.min(self.corner_angle(i) for i in range(3))
+
+    def is_seditious(self) -> bool:
+        corner_angles = [self.corner_angle(i) for i in range(3)]
+        min_idx = np.argmin(corner_angles)
+        min_angle = corner_angles[min_idx]
+
+        # 角度が鋭角かどうか。
+        if min_angle > math.pi / 3:
+            return False
+
+        v0 = self.vertices[min_idx]
+        v1 = self.vertices[(min_idx + 1) % 3]
+        v2 = self.vertices[(min_idx + 2) % 3]
+
+        segments1 = self.mesh.adjacent_segments(v1)
+        segments2 = self.mesh.adjacent_segments(v2)
+
+        # seditious edgeの両端が線分の中間点に位置するか。
+        if len(segments1) != 2 or len(segments2) != 2:
+            return False
+
+        # 交差線分が等分割され、同じ線分が細分化されたものであるか。
+        s1, s2 = segments1
+        length_diff = abs(s1.length() - s2.length())
+        angle_diff = abs(s1.angle_segment(s2) - math.pi)
+        if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+            return False
+        s1, s2 = segments2
+        length_diff = abs(s1.length() - s2.length())
+        angle_diff = abs(s1.angle_segment(s2) - math.pi)
+        if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+            return False
+
+        if abs(v0.distance(v1) - v0.distance(v2)) > TOLERANCE:
+            return False
+
+        return True
 
 class Polyloop:
     """頂点が時計回りに格納された多角形ループ
@@ -713,6 +811,7 @@ class Triangulation:
         self.outerloops = outerloops
 
         super_tri = self.bounding_triangle_from_points(vertices, size_fac=2.0)
+        super_tri.mesh = self
         self.triangles = [super_tri]
         super_tri.v1.sample_triangle = super_tri
         super_tri.v1.mesh = self
@@ -759,6 +858,9 @@ class Triangulation:
             不良な三角形、見つからなかった場合はNoneを返す
         """
         for tri_i in self.triangles:
+            if tri_i.is_seditious():
+                print("find seditious")
+                continue
             if not(tri_i.is_infinite()) and tri_i.edge_radius_ratio() > re_rate:
                 return tri_i
         return None
@@ -832,7 +934,7 @@ class Triangulation:
             if tri.ispoint_inside(v.point):
                 return tri
         else:
-            raise Exception("No triangles include points.")
+            raise Exception(f"No triangles include point coordinate: [{v.x},{v.y}]")
 
     def add_vertex(self, v: Vertex, checktri=None) -> None:
         """頂点vを挿入
@@ -1006,16 +1108,18 @@ class Triangulation:
         axisdir = np.array([seg.v2.x - seg.v1.x, seg.v2.y - seg.v1.y])
         axisdir /= np.linalg.norm(axisdir)
 
+        # 両端が鋭角の場合の線分分割
         if accute_pos == SegmentPosition.both:
             i1 = int(math.floor(math.log(seg.length() / 2) / math.log(2.0)))
             dl1 = 2.0 ** i1
             vec = axisdir * dl1
             pt1 = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
 
-            i2 = int(math.floor(math.log(seg.length() / 5) / math.log(2.0)))
+            length2 = seg.length() * 4 / 5 - dl1
+            i2 = int(math.floor(math.log(length2) / math.log(2.0)))
             dl2 = 2.0 ** i2
-            vec = axisdir * (seg.length() - dl2)
-            pt2 = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
+            vec = -axisdir * dl2
+            pt2 = Vertex(seg.v2.x + vec[0], seg.v2.y + vec[1], self)
 
             self.add_vertex(pt1)
             self.add_vertex(pt2)
@@ -1024,6 +1128,7 @@ class Triangulation:
             seg3 = Segment(pt2, seg.v2, mesh=self)
             return [seg1, seg2, seg3]
 
+        # 一端が鋭角の場合の線分分割
         i = int(math.floor(math.log(seg.length() / 1.5) / math.log(2.0)))
         dl = 2.0**i
         if accute_pos is None:
@@ -1032,9 +1137,10 @@ class Triangulation:
             vec = axisdir * dl
             mid_pt = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
         elif accute_pos == SegmentPosition.jend:
-            vec = axisdir * (seg.length() - dl)
-            mid_pt = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self)
+            vec = -axisdir * dl
+            mid_pt = Vertex(seg.v2.x + vec[0], seg.v2.y + vec[1], self)
 
+        # その他の場合の線分分割
         self.add_vertex(mid_pt)
         seg1 = Segment(seg.v1, mid_pt, mesh=self)
         seg2 = Segment(mid_pt, seg.v2, mesh=self)
