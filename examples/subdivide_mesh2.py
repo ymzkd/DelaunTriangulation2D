@@ -7,7 +7,7 @@ import examples.develop_helper as dh
 
 v1 = tr.Vertex(-1.5, -1.0)
 v1a = tr.Vertex(-0.2, -1.0)
-v1b = tr.Vertex(0.0, -0.9)
+v1b = tr.Vertex(0.0, 0.1) # inner coner
 v1c = tr.Vertex(0.1, -1.0)
 v2 = tr.Vertex(1.5, -1.2)
 v3 = tr.Vertex(1.5, 1.0)

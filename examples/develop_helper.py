@@ -4,6 +4,7 @@ from random import choice
 import numpy as np
 
 import triangulation as tr
+import triangulation3d as tr3
 
 
 def plot_triangulation(triangles: List[tr.Triangle]=[], segments=[], triangulate=None):
@@ -143,7 +144,9 @@ def plot_mesh(mesh: tr.Triangulation):
     # mesh faces
     faces = []
     rad_edge_ratios = []
-    for ti in mesh.triangles:
+
+    # for ti in mesh.triangles:
+    for ti in mesh.extract_inside():
         if ti.is_infinite():
             continue
         i1 = mesh.vertices.index(ti.v1)
@@ -158,6 +161,69 @@ def plot_mesh(mesh: tr.Triangulation):
     # plot each face with a different color
     # surf.plot(cpos=[-1, 1, 0.5], show_edges=True, color=True)
     shrunk.plot(cpos=[[0,0,1],[0,0,0],[0,1,0]], scalars=np.array(rad_edge_ratios), show_edges=True, color=True, line_width=2.5, zoom='tight')
+
+def plot_triangulation3(tri3: tr3.Triangulation3):
+    import numpy as np
+    import pyvista as pv
+    # from pyvista import CellType # CellType見つからない
+
+    # pdata = pv.PolyData(tri3.vertices)
+    # pdata['orig_sphere'] = np.arange(100)
+
+    # create many spheres from the point cloud
+    # sphere = pv.Sphere(radius=0.02, phi_resolution=10, theta_resolution=10)
+    # pc = pdata.glyph(scale=False, geom=sphere, orient=False)
+
+    vertices = np.array([[vi.x, vi.y, vi.z] for vi in tri3.vertices])
+
+    cells = []
+    cells2 = []
+    count_finitecell = 0
+    for ti in tri3.tetrahedrons:
+
+        i1 = tri3.vertices.index(ti.v1)
+        i2 = tri3.vertices.index(ti.v2)
+        i3 = tri3.vertices.index(ti.v3)
+        i4 = tri3.vertices.index(ti.v4)
+
+        if ti.is_infinite():
+            cells2.append([4, i1, i2, i3, i4])
+        else:
+            cells.append([4, i1, i2, i3, i4])
+            count_finitecell += 1
+
+    if len(cells) >= 1:
+        cells = np.hstack(cells)
+    else:
+        cells = np.array(cells)
+    if len(cells2) >= 1:
+        cells2 = np.hstack(cells2)
+    else:
+        cells2 = np.array(cells2)
+
+    # each cell is a HEXAHEDRON
+    celltypes = np.empty(count_finitecell, dtype=np.uint8)
+    celltypes[:] = 10
+    grid1 = pv.UnstructuredGrid(cells, celltypes, vertices)
+
+    # each cell is a HEXAHEDRON
+    celltypes = np.empty(len(tri3.tetrahedrons) - count_finitecell, dtype=np.uint8)
+    celltypes[:] = 10
+    grid2 = pv.UnstructuredGrid(cells2, celltypes, vertices)
+
+    p = pv.Plotter()
+    p.set_background("lightgray")
+    p.add_mesh(grid1, show_edges=True, color='red')
+    p.add_mesh(grid2, show_edges=True, opacity=0.6)
+
+    # exploded = grid.explode()
+    _ = p.show()
+    # p = pv.Plotter()
+    # p.add_mesh(tet)
+    # p.add_mesh(pc, cmap='coolwarm')
+    # p.enable_shadows()
+    # p.show()
+    # pc.plot(cmap='Reds')
 
 def triangulation_statics(tess: tr.Triangulation):
     evaluates = []

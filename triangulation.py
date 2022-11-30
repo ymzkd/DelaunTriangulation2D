@@ -10,6 +10,11 @@ import numpy as np
 TOLERANCE = 1.0e-12
 
 
+class TriangleLocationType(Enum):
+    undefined = 0
+    inside = 1
+    outside = 2
+
 class SegmentPosition(Enum):
     iend = 1
     jend = 2
@@ -223,14 +228,29 @@ class Segment:
         else:
             return None
 
-    # @staticmethod
-    # def extract_byends(segments: List[Segment], vi: Vertex, vj: Vertex) -> Union[Segment, None]:
-    #     for seg_i in segments:
-    #         j1 = (seg_i.v1 == vi or seg_i.v2 == vi)
-    #         j2 = (seg_i.v1 == vj or seg_i.v2 == vj)
-    #         if j1 and j2:
-    #             return seg_i
-    #     return None
+    def adjoin_triangles(self) -> [Triangle, Triangle]:
+        """
+        線分の左右両側にある三角形を抽出
+        Returns:
+            [左側三角形, 右側三角形]
+        """
+        left_tri = None
+        right_tri = None
+        for ti in self.mesh.triangles:
+            for i in range(3):
+                v1 = ti.vertices[i]
+                v2 = ti.vertices[(i+1)%3]
+                if v1 == self.v1 and v2 == self.v2:
+                    left_tri = ti
+                    break
+                elif v1 == self.v2 and v2 == self.v1:
+                    right_tri = ti
+                    break
+            # 左右の三角形がどちらも見つかったら終了
+            if left_tri and right_tri:
+                break
+
+        return left_tri, right_tri
 
 
 class Circle:
@@ -320,16 +340,18 @@ class Triangle:
         n1, n2, n3 (Triangle): 隣接三角形
         vertices (List[Vertex]): メッシュ頂点の配列[v1, v2, v3]を返すproperty。
         neighs (List[Triangle]): メッシュ隣接要素の配列[n1, n2, n3]を返すproperty。
-
     """
     vertices: List[Vertex]
     neighs: List[Triangle]
     mesh: Triangulation
+    locationtype: TriangleLocationType
 
-    def __init__(self, v1, v2, v3, n1=None, n2=None, n3=None, mesh: Triangulation = None):
+    def __init__(self, v1, v2, v3, n1=None, n2=None, n3=None,
+                 mesh: Triangulation = None, locationtype = TriangleLocationType.undefined):
         self.vertices = [v1, v2, v3]
         self.neighs = [n1, n2, n3]
         self.mesh = mesh
+        self.locationtype = locationtype
 
     @property
     def v1(self):
@@ -666,13 +688,19 @@ class Triangle:
         s1, s2 = segments1
         length_diff = abs(s1.length() - s2.length())
         angle_diff = abs(s1.angle_segment(s2) - math.pi)
-        if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+        if angle_diff > TOLERANCE:
             return False
+        # TODO: 長さについての条件は上手くいかないこともある。
+        # if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+        #     return False
         s1, s2 = segments2
         length_diff = abs(s1.length() - s2.length())
         angle_diff = abs(s1.angle_segment(s2) - math.pi)
-        if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+        if angle_diff > TOLERANCE:
             return False
+        # TODO: 長さについての条件は上手くいかないこともある。
+        # if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+        #     return False
 
         if abs(v0.distance(v1) - v0.distance(v2)) > TOLERANCE:
             return False
@@ -861,7 +889,8 @@ class Triangulation:
             if tri_i.is_seditious():
                 print("find seditious")
                 continue
-            if not(tri_i.is_infinite()) and tri_i.edge_radius_ratio() > re_rate:
+            if tri_i.locationtype == TriangleLocationType.inside and tri_i.edge_radius_ratio() > re_rate:
+            # if not(tri_i.is_infinite()) and tri_i.edge_radius_ratio() > re_rate:
                 return tri_i
         return None
 
@@ -875,9 +904,11 @@ class Triangulation:
                 self.segments.remove(seg_i)
                 self.segments.extend(segs)
                 self.resolve_encroach()
+                self.mark_inout()
                 return
 
         self.add_vertex(v)
+        self.mark_inout()
 
     def adjacent_segments(self, v: Vertex) -> List[Segment]:
         """
@@ -895,7 +926,7 @@ class Triangulation:
         return segments
 
     @staticmethod
-    def createMesh(poly: Polyloop, p: float, maxiter: int = 4):
+    def createMesh(poly: Polyloop, p: float, maxiter: int = 50):
         segments = poly.edges()
         # step2
         mesh = Triangulation(poly.vertices)
@@ -905,6 +936,7 @@ class Triangulation:
 
         # step3
         mesh.resolve_encroach()
+        mesh.mark_inout()
 
         # step4
         count_iter = 0
@@ -999,6 +1031,21 @@ class Triangulation:
                 continue
 
             face_stack.extend(ti.flip(fi))
+
+    def isvertex_pair_onloop(self, v1: Vertex, v2: Vertex) -> bool:
+        """
+        節点のペアが外周ループ上の線分に対応するかどうか調べる。
+
+        Args:
+            v1, v2 (Vertex): 調査対象節点
+
+        Returns:
+            節点のペアが外周ループ線分に対応する場合はTrue,そうでない場合はFalse
+        """
+        for si in self.segments:
+            if (si.v1 == v1 or si.v1 == v2) and (si.v2 == v1 or si.v2 == v2):
+                return True
+        return False
 
     @staticmethod
     def bounding_triangle_from_points(vertices: List[Vertex], size_fac=2.0) -> Triangle:
@@ -1237,7 +1284,7 @@ class Triangulation:
         collect_triangles = [loop.neighs[0]]
         check_stack = [loop.neighs[0]]
 
-        while(check_stack):
+        while check_stack:
             tgt = check_stack.pop()
             for i, ti in enumerate(tgt.neighs):
                 if ti is None:
@@ -1267,3 +1314,37 @@ class Triangulation:
             triangles.append(tri)
 
         return triangles
+
+    def extract_inside(self) -> List[Triangle]:
+        tri, _ = self.segments[0].adjoin_triangles()
+        inside_triangles = [tri]
+        search_que = []
+        for i in range(3):
+            v1 = tri.vertices[i]
+            v2 = tri.vertices[(i+1)%3]
+            if self.isvertex_pair_onloop(v1, v2):
+                continue
+            search_que.append(tri.neighs[i])
+
+        while search_que:
+            tri = search_que.pop()
+
+            for i in range(3):
+                v1 = tri.vertices[i]
+                v2 = tri.vertices[(i + 1) % 3]
+                if tri.neighs[i] in inside_triangles:
+                    continue
+                if self.isvertex_pair_onloop(v1, v2):
+                    continue
+                inside_triangles.append(tri.neighs[i])
+                search_que.append(tri.neighs[i])
+
+        return inside_triangles
+
+    def mark_inout(self):
+        inside = self.extract_inside()
+        for tri in self.triangles:
+            if tri in inside:
+                tri.locationtype = TriangleLocationType.inside
+            else:
+                tri.locationtype = TriangleLocationType.outside

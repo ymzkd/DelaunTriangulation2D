@@ -1,4 +1,4 @@
-from random import sample
+# from random import sample
 
 import triangulation as tr
 import numpy as np
@@ -10,7 +10,7 @@ v2 = tr.Vertex(10.0, -1.2)
 
 # x座標値14はエッジ分割時の鋭角対応で突破できる。
 # x座標値16はコーナー三角形の対応が必要になりそう。
-v3 = tr.Vertex(16.0, 1.0)
+v3 = tr.Vertex(16.5, 1.0)
 v4 = tr.Vertex(-1.0, 1.0)
 poly = tr.Polyloop([v1, v2, v3, v4])
 
