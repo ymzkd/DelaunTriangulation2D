@@ -1,0 +1,783 @@
+from __future__ import annotations
+
+import math
+from enum import Enum
+from typing import List, Union, Dict
+
+import numpy as np
+
+from geometric_trait2 import Point, Line, Circle, Triangle
+
+TOLERANCE = 1.0e-12
+
+
+class TriangleLocationType(Enum):
+    """このFacetがメッシュの領域内部にあるか、外部に属するかの属性
+    """
+    undefined = 0
+    inside = 1
+    outside = 2
+
+
+class SegmentPosition(Enum):
+    """Segmentの端部を指定する識別子
+    """
+    iend = 1
+    jend = 2
+    both = 3
+
+
+class VertexSource(Enum):
+    """頂点の属性情報
+    """
+    fixed = 1
+    auto = 2
+
+
+class Vertex(Point):
+    """メッシュ頂点クラス
+
+    Attributes:
+        x, y (float): 頂点座標
+        mesh (Mesh): この頂点が属するMesh
+        infinite (bool): この頂点がGhostVertex,すなわち無限遠であるならばTrue,そうでない場合はFalse
+                         Meshに含まれるGhostVertexは1つのみである点に注意
+        source (VertexSource): この頂点の属性データ。ユーザー指定、アルゴリズム自動生成などの属性を指定
+    """
+
+    def __init__(self, x, y, mesh: Mesh = None, infinite: bool = False, source: VertexSource = VertexSource.fixed):
+        super(Vertex, self).__init__(x, y)
+        self.mesh = mesh
+        self.infinite = infinite
+        self.source = source
+
+
+class Edge(Line[Vertex]):
+
+    def __init__(self, v1: Vertex, v2: Vertex, mesh: Mesh = None):
+        super(Edge, self).__init__(v1, v2)
+        self.mesh = mesh
+
+    def opposite(self) -> Edge:
+        return Edge(self.v2, self.v1, self.mesh)
+
+
+class Segment(Edge):
+    """2つの節点を結ぶ線分
+    Attributes:
+        v1 (Vertex): 節点1
+        v2 (Vertex): 節点2
+    """
+    children: List[Segment]
+
+    def __init__(self, v1: Vertex, v2: Vertex, mesh: Mesh = None):
+        super(Segment, self).__init__(v1, v2, mesh)
+        self.children = []
+
+    def __contains__(self, item: Segment):
+        if item == self:
+            return True
+        elif self.children:
+            for si in self.children:
+                if si.__contains__(item):
+                    return True
+        else:
+            return False
+
+    @property
+    def midpt(self) -> Vertex:
+        x = (self.v1.x + self.v2.x) * 0.5
+        y = (self.v1.y + self.v2.y) * 0.5
+        return Vertex(x, y, mesh=self.mesh)
+
+    def diametric_ball(self) -> Circle:
+        """線分を直径とした円を生成
+
+        Returns:
+            Circle: 線分を直径とした円
+        """
+        return Circle(self.midpt, self.length() * 0.5)
+
+    def vertex_encroached(self, v: Vertex) -> Segment | None:
+        """
+        頂点vがこの線分の直径円の中に位置するかどうか判定
+        Args:
+            v (Vertex): 判定対称の頂点
+
+        Returns:
+            (Segment | None) 頂点vがこの線分の直径円の中に位置するか。
+        """
+        if v is self.v1 or v is self.v2:
+            return None
+
+        cir = self.diametric_ball()
+        if cir.ispoint_inside([v.x, v.y]):
+            if self.children:
+                for seg_i in self.children:
+                    if s := seg_i.vertex_encroached(v):
+                        return s
+            else:
+                return self
+        else:
+            return None
+
+    def flatten_child(self) -> List[Segment]:
+        """この線分のchildを展開して下層の線分をリストにまとめる。
+
+        Returns:
+            List[Segment]: この線分以下の樹構造のリスト
+        """
+        children = []
+        if self.children:
+            for child in self.children:
+                children += child.flatten_child()
+        else:
+            children.append(self)
+        return children
+
+    def pick_adjacent_vertex(self, other: Segment):
+        """
+        入力線分はこの線分のどの頂点において接触しているか？あるいは接触していない場合はNoneを返す。
+        Args:
+            other (Segment): 確認する対象線分
+
+        Returns (None | Vertex2):
+
+        """
+        if self.v1 == other.v1 or self.v1 == other.v2:
+            return self.v1
+        elif self.v2 == other.v1 or self.v2 == other.v2:
+            return self.v2
+        else:
+            return None
+
+    def adjacent_segments(self, pos: SegmentPosition):
+        """この線分に接続する線分のリストを生成
+
+        この線分に接続する線分のリストを生成する。この線分自体は含まず、
+        取得される線分はSegmentツリーの親である。
+
+        Args:
+            pos (SegmentPosition): この線分のどちら側の節点の接続線分を抽出するか？
+
+        Returns:
+            List[Segment]: この線分に接続する線分のリスト
+        """
+        if pos == SegmentPosition.iend:
+            tgt_vertex = self.v1
+        else:  # pos == SegmentPosition.jend
+            tgt_vertex = self.v2
+
+        # どうやってこの線分自身の親線分をはじくか？
+        segments = []
+        for si in self.mesh.segments:
+            adj = (si.v1 == tgt_vertex or si.v2 == tgt_vertex)
+            if adj and (self not in si):
+                segments.append(si)
+        return segments
+
+    def adjacent_min_angle(self, pos: SegmentPosition) -> float:
+        """
+        線分のi端/j端に交差する線分との最小角度を求める。
+        Args:
+            pos (SegmentPosition): i端/j端を指定する指定子
+
+        Returns:
+            float: 位置に応じた最小交差角度で、交差がない場合はPiを返す。
+
+        """
+        segments = self.adjacent_segments(pos)
+        if len(segments) == 0:
+            return math.pi
+
+        pivot = self.v1 if pos == SegmentPosition.iend else self.v2
+        angles = [self.angle_segment(si, pivot) for si in segments]
+        return min(angles)
+
+    def direction_from_pivot(self, pivot: Vertex):
+        """
+        線分の方向ベクトルを指定した一端から他の一端へのベクトルとして求める。
+        Args:
+            pivot (Vertex): 線分の一端の節点でpivotからの方向ベクトルを求める。
+
+        Returns:
+            np.array: 方向ベクトル
+        """
+        if self.v1 == pivot:
+            return np.array([self.v2.x - self.v1.x, self.v2.y - self.v1.y])
+        elif self.v2 == pivot:
+            return np.array([self.v1.x - self.v2.x, self.v1.y - self.v2.y])
+        else:
+            raise ValueError("argument 'pivot' must be equal to either node of the segment.")
+
+    def angle_segment(self, other: Segment, pivot: Vertex = None) -> float:
+        """
+        一端を共有する他の線分との交差角度
+        Args:
+            other: 交差する線分
+            pivot: 交差する節点、入力がない場合はメソッド内部で調べる
+
+        Returns:
+            線分同士の交差角度[rad: 0～pi]
+        """
+        if pivot is None:
+            pivot = self.pick_adjacent_vertex(other)
+
+        v1 = self.direction_from_pivot(pivot)
+        v2 = other.direction_from_pivot(pivot)
+        norm_product = v1 @ v2 / (np.linalg.norm(v1) * np.linalg.norm(v2))
+        if norm_product <= -1.0:
+            return math.pi
+        else:
+            return math.acos(norm_product)
+
+    def encroach_type(self) -> Union[SegmentPosition, None]:
+        """
+        この線分が他の線分といずれかの端部で鋭角を成すか、両端に鋭角を持つか、それ以外であるか
+        Returns:
+            それぞれの場合におけるSegmentPosition
+        """
+        border_angle = math.pi / 2
+        check_i = self.adjacent_min_angle(SegmentPosition.iend) < border_angle
+        check_j = self.adjacent_min_angle(SegmentPosition.jend) < border_angle
+        if check_i and check_j:
+            return SegmentPosition.both
+        elif check_i:
+            return SegmentPosition.iend
+        elif check_j:
+            return SegmentPosition.jend
+        else:
+            return None
+
+
+class Facet(Triangle[Vertex]):
+    """一つの三角形メッシュ面
+
+    Attributes:
+        v1, v2, v3 (Vertex) : メッシュ頂点
+        mesh (Mesh): この頂点が属するMesh
+        locationtype (TriangleLocationType): このFacetがメッシュの領域内部にあるか、外部に属するかの属性
+    """
+    vertices: List[Vertex]
+
+    def __init__(self, v1, v2, v3,
+                 mesh: Mesh = None, locationtype = TriangleLocationType.undefined):
+        super(Facet, self).__init__(v1, v2, v3)
+
+        if not self.is_infinite():
+            if abs(self.area()) < 0.0000001:
+                raise ValueError(f"Triangle area is too small.[{self.area()}]\n{self}")
+
+        # self.vertices = [v1, v2, v3]
+        self.mesh = mesh
+        self.locationtype = locationtype
+
+    @property
+    def edges(self) -> List[Edge]:
+        return [Edge(self.vertices[i], self.vertices[(i+1)%3]) for i in range(3)]
+
+    def get_edge(self, idx: int) -> Edge:
+        if idx == 0:
+            return Edge(self.v1, self.v2, self.mesh)
+        elif idx == 1:
+            return Edge(self.v2, self.v3, self.mesh)
+        else:
+            return Edge(self.v3, self.v1, self.mesh)
+
+    def is_incircumcircle(self, v: Vertex) -> bool:
+        """節点vがこの三角形の外接円の内部に位置するか
+            節点vがこの三角形の外接円の内部に位置するかを判定。三角形がGhostTriangleの場合は
+            finite edgeの半平面(左側・CCW)に節点が位置すれば外接円内部と判定する。
+
+        Args:
+            v: テスト対象の節点
+
+        Returns:
+            節点vがこの三角形の内部に位置する場合はTrue, その他の場合はFalse
+        """
+        if self.is_infinite():
+            # 節点が半平面に位置するか？
+            return self.__infinite_is_incercumcircle(v, 0.000001)
+        else:
+            # 三角形外接円に節点が含まれるか？
+            cir = self.outer_circle()
+            return cir.ispoint_inside(v.toarray())
+
+    def __infinite_is_incercumcircle(self, v: Vertex, delta=0.0001) -> bool:
+        """infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置するか？
+
+        infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置する場合はTrue,
+        そうでない場合はFalseを返す。ただし、外接円内部になりやすいように微小許容幅をとることも
+        考慮し、delta >= 0 とした微小値を設定することができる。
+
+        Args:
+            v (Vertex): 外接円内部判定対象の節点
+            delta (float): 外接円内部になりやすいような許容幅. delta>=0
+
+        Returns:
+            bool: 節点vが三角形の外接円内部の場合はTrue, そうでない場合はFalse
+        """
+
+        vid_inf = [v.infinite for v in self.vertices].index(True)
+        edge = self.get_edge((vid_inf + 1) % 3)
+        v12 = edge.direction().toarray()
+        ev12 = v12 / np.linalg.norm(v12)
+        vw = (v - edge.v1).toarray()
+        v12d = np.dot(vw, ev12) * ev12
+        t = np.dot(v12, v12d) / np.dot(v12, v12)
+        dw = vw - v12d
+
+        if 0.0 < t < 1.0:
+            dt = delta * (1.0 - abs((t - 0.5) * 2.0))
+        else:
+            dt = -delta
+
+        # print(np.cross(ev12, dw), t, dt)
+        return np.cross(ev12, dw) > -dt
+
+    def is_infinite(self) -> bool:
+        return any([vi.infinite for vi in self.vertices])
+
+    def orientation(self) -> float:
+        """
+        節点順がCCWであれば正、CWであれば負
+        """
+        mat = np.array([[self.v1.x - self.v3.x, self.v1.y - self.v3.y],
+                        [self.v2.x - self.v3.x, self.v2.y - self.v3.y]])
+        return np.linalg.det(mat)
+
+    def fix_orientation(self):
+        """節点順がCCWでなかった場合に節点順をCCWに修正"""
+        if not(self.is_ccw()):
+            self.v2, self.v3 = self.v3, self.v2
+
+    def edge_radius_ratio(self) -> float:
+        rad = self.outer_circle().rad
+        edge_length = []
+        for i in range(3):
+            edge = self.get_edge(i)
+            pt0, pt1 = edge.v1.toarray(), edge.v2.toarray()
+            edge_length.append(np.linalg.norm(pt1 - pt0))
+        return rad / np.min(edge_length)
+
+    def corner_angle(self, idx: int) -> float:
+        """
+        入力idに基づいた三角形コーナーの角度(rad)を求める。
+        Args:
+            idx: 0～2のコーナーを示すインデックス
+
+        Returns:
+            コーナーの角度(rad)
+        """
+        v0 = self.vertices[idx]
+        v1 = self.vertices[(idx + 1) % 3]
+        v2 = self.vertices[(idx + 2) % 3]
+        vec1 = np.array([v1.x - v0.x, v1.y - v0.y])
+        vec2 = np.array([v2.x - v0.x, v2.y - v0.y])
+        cos_sita = vec1 @ vec2 / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        return math.acos(cos_sita)
+
+    def is_seditious(self) -> bool:
+        corner_angles = [self.corner_angle(i) for i in range(3)]
+        min_idx = np.argmin(corner_angles)
+        min_angle = corner_angles[min_idx]
+
+        # 角度が鋭角かどうか。
+        if min_angle > math.pi / 3:
+            return False
+
+        v0 = self.vertices[min_idx]
+        v1 = self.vertices[(min_idx + 1) % 3]
+        v2 = self.vertices[(min_idx + 2) % 3]
+
+        segments1 = self.mesh.adjacent_segments(v1)
+        segments2 = self.mesh.adjacent_segments(v2)
+
+        # seditious edgeの両端が線分の中間点に位置するか。
+        if len(segments1) != 2 or len(segments2) != 2:
+            return False
+
+        # 交差線分が等分割され、同じ線分が細分化されたものであるか。
+        s1, s2 = segments1
+        length_diff = abs(s1.length() - s2.length())
+        angle_diff = abs(s1.angle_segment(s2) - math.pi)
+        if angle_diff > TOLERANCE:
+            return False
+        # TODO: 長さについての条件は上手くいかないこともある。
+        # if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+        #     return False
+        s1, s2 = segments2
+        length_diff = abs(s1.length() - s2.length())
+        angle_diff = abs(s1.angle_segment(s2) - math.pi)
+        if angle_diff > TOLERANCE:
+            return False
+        # TODO: 長さについての条件は上手くいかないこともある。
+        # if length_diff > TOLERANCE or angle_diff > TOLERANCE:
+        #     return False
+
+        if abs(v0.distance(v1) - v0.distance(v2)) > TOLERANCE:
+            return False
+
+        return True
+
+
+class Polyloop:
+    """頂点が時計回りに格納された多角形ループ
+
+    Attributes:
+        vertices (List[Vertex]): ループの頂点リスト
+        segments (List[Segment]): ループのSegmentリスト
+
+    """
+    vertices: List[Vertex]
+    segments: List[Segment]
+
+    def __init__(self, vertices: List[Vertex], mesh=None):
+        self.vertices = vertices
+        self.mesh = mesh
+
+        v_num = len(vertices)
+        self.segments = []
+        for i in range(v_num):
+            self.segments.append(Segment(vertices[i], vertices[(i+1)%v_num], mesh))
+
+
+class Mesh:
+    """三角形メッシュ生成・データの格納
+
+    Attributes:
+        outerloop (Polyloop): 分割に挿入されたPolyloopのリスト
+        vertices (List[Vertex]): 頂点のリスト
+        triangles (List[Triangles]): 生成された三角形のリスト
+        edge_triangle_table (Dict[Segment,Triangle]): エッジをキーとしてそれに隣接する三角形をデータとした関係テーブル
+    """
+    edge_triangle_table: Dict[Edge, Facet]
+    triangles: List[Facet]
+    vertices: List[Vertex]
+    outerloop: Polyloop
+    segments: List[Segment]
+
+    def __init__(self, vertices: List[Vertex], outerloop: Polyloop, p: float, maxiter: int = 500):
+        # Step1 Initialize dates
+        self.edge_triangle_table = {}
+        self.triangles = []
+        self.vertices = []
+        self.outerloop = outerloop
+        self.segments = self.outerloop.segments
+        for seg_i in self.segments:
+            seg_i.mesh = self
+
+        # step2 Compute Del S
+        self.triangulate(vertices)
+
+        # step3 Resolve segment encroachment
+        self.resolve_encroach()
+        self.mark_inout()
+
+        # step4 Subdivide triangles
+        count_iter = 0
+        while tri := self.pick_poor_triangle(p):
+            count_iter += 1
+            if count_iter > maxiter:
+                print("iteration reach max iteration.")
+                break
+            if tri:
+                self.split_triangle(tri)
+            else:
+                break
+
+    def triangulate(self, vertices: List[Vertex]):
+        if len(vertices) < 3:
+            print("3つ以上の節点入力が必要")
+
+        gv = Vertex(math.inf, math.inf, infinite=True, source=VertexSource.auto)
+        v1 = vertices.pop()
+        v2 = vertices.pop()
+        v3 = vertices.pop()
+
+        t1 = Facet(v1, v2, v3, mesh=self)
+        t1.fix_orientation()
+        gt1 = Facet(gv, t1.v2, t1.v1)
+        gt2 = Facet(gv, t1.v3, t1.v2)
+        gt3 = Facet(gv, t1.v1, t1.v3)
+
+        self.vertices = [gv, v1, v2, v3]
+        self.add_triangle(t1)
+        self.add_triangle(gt1)
+        self.add_triangle(gt2)
+        self.add_triangle(gt3)
+
+        for vi in vertices:
+            self.add_vertex(vi)
+
+    def pick_encroach(self) -> Segment | None:
+        """MeshからencroachしているSegmentを1つ抽出
+
+        Meshに含まれるencroachしている線分と頂点を調査し、
+        encroachしているがあれば線分を返し、なければNoneを返す
+
+        Returns:
+            Segment|None: Meshにencroachしているedgeが含まれる場合はそれを返し、
+            その他の場合はNoneを返す。
+        """
+        for vi in self.finite_vertices():
+            for seg_i in self.segments:
+                if vi is seg_i.v1 or vi is seg_i.v2:
+                    continue
+                if s := seg_i.vertex_encroached(vi):
+                    return s
+        return None
+
+    def resolve_encroach(self):
+        while e := self.pick_encroach():
+            segments = self.split_segment(e)
+            e.children = segments
+
+    def pick_poor_triangle(self, re_rate: float) -> Facet | None:
+        """
+        指定したradius-edge比を満たしていない不良な三角形を抽出
+        Args:
+            re_rate: 不良と判断するradius-edge比のしきい値
+
+        Returns:
+            不良な三角形、見つからなかった場合はNoneを返す
+        """
+        for tri_i in self.finite_triangles():
+            if tri_i.is_seditious():
+                print("find seditious")
+                continue
+            if tri_i.locationtype == TriangleLocationType.inside and tri_i.edge_radius_ratio() > re_rate:
+                return tri_i
+        return None
+
+    def split_triangle(self, tri: Facet):
+        c = tri.outer_circle()
+        v = Vertex(c.center.x, c.center.y, mesh=self, source=VertexSource.auto)
+
+        # 追加点にencroachが見つかった場合はsegmentを処理
+        for seg_i in self.segments:
+            if s := seg_i.vertex_encroached(v):
+                segments = self.split_segment(s)
+                s.children = segments
+                # TODO: この後の処理はなんとなく実装しているので要確認
+                self.resolve_encroach()
+                self.mark_inout()
+                return
+
+        # FacetのCircumCenterを挿入
+        self.add_vertex(v)
+        self.resolve_encroach()
+        self.mark_inout()
+
+    def adjacent_segments(self, v: Vertex) -> List[Segment]:
+        """
+        節点vに接続される線分を抽出
+        Args:
+            v: 対象節点
+
+        Returns:
+            vに接続される線分のリスト
+        """
+        segments = []
+        for si in self.segments:
+            if si.v1 == v or si.v2 == v:
+                segments.append(si)
+        return segments
+
+    def locate(self, v: Vertex) -> Facet:
+        """任意の点を外接円内部に含む三角形を探索する。
+        もし、既存のTriangulationの外側に点が挿入された場合は、
+        半平面に挿入節点を含むGhost Triangleを返す。
+
+        Args:
+            v (Vertex): 頂点
+
+        Returns:
+            Facet: 入力節点を含む三角形
+        """
+        for tri in self.triangles:
+            if tri.is_incircumcircle(v):
+                return tri
+        else:
+            raise Exception(f"No triangles include point coordinate: [{v.x},{v.y}]")
+
+    def dig_cavity(self, u: Vertex, edge: Edge):
+        """
+        Triangulation3内で追加節点uを四面体の外接球に含む四面体群を探索する。
+        Args:
+            u(Vertex): 追加節点
+            edge(Edge): 探索起点となる四面体面のFacetDescriptor
+
+        Notes:
+            'Delaunay Mesh Generation' Chapter3.4
+        """
+        base_edge = edge.opposite()
+        try:
+            tri = self.edge_triangle_table[base_edge]
+        except KeyError:
+            # step2
+            # if tri.is_infinite():
+                # tet_new = Tetrahedron(u, tri.v1, tri.v2, tri.v3, self)
+                # self.add_triangle()
+            return
+
+        if tri.is_incircumcircle(u):
+            edges = [tri.get_edge(i) for i in range(3)]
+            self.remove_triangle(tri)
+            for e in edges:
+                if e == base_edge:
+                    continue
+                self.dig_cavity(u, e)
+        else:
+            self.add_triangle(Facet(u, edge.v1, edge.v2, mesh=self))
+
+    def add_vertex(self, v: Vertex) -> None:
+        """頂点vを挿入
+
+        Args:
+            v (Vertex): 挿入節点
+        """
+        tri = self.locate(v)
+        self.vertices.append(v)
+
+        edges = [tri.get_edge(i) for i in range(3)]
+        self.remove_triangle(tri)
+        # print('Search Start Triangle: ', tri)
+        for edge in edges:
+            self.dig_cavity(v, edge)
+
+    def remove_triangle(self, tri: Facet):
+        _ = self.edge_triangle_table.pop(tri.get_edge(0))
+        _ = self.edge_triangle_table.pop(tri.get_edge(1))
+        _ = self.edge_triangle_table.pop(tri.get_edge(2))
+        self.triangles.remove(tri)
+
+    def add_triangle(self, tri: Facet):
+        e1 = tri.get_edge(0)
+        e2 = tri.get_edge(1)
+        e3 = tri.get_edge(2)
+        self.edge_triangle_table[e1] = tri
+        self.edge_triangle_table[e2] = tri
+        self.edge_triangle_table[e3] = tri
+        self.triangles.append(tri)
+
+    def split_segment(self, seg: Segment) -> List[Segment]:
+        """encroachしている線分を分割
+
+        encroachしている線分を線分同士の接続性や角度関係を考慮して分割
+
+        Args:
+            seg (Segment): 分割対象線分
+
+        Returns:
+            List[Segment]: 分割された線分
+
+        Notes:
+
+        """
+        acute_pos = seg.encroach_type()
+        axis = np.array([seg.v2.x - seg.v1.x, seg.v2.y - seg.v1.y])
+        axis /= np.linalg.norm(axis)
+
+        # 両端が鋭角の場合の線分分割
+        if acute_pos == SegmentPosition.both:
+            i1 = int(math.floor(math.log(seg.length() / 2) / math.log(2.0)))
+            dl1 = 2.0 ** i1
+            vec = axis * dl1
+            pt1 = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self, source=VertexSource.auto)
+
+            length2 = seg.length() * 4 / 5 - dl1
+            i2 = int(math.floor(math.log(length2) / math.log(2.0)))
+            dl2 = 2.0 ** i2
+            vec = -axis * dl2
+            pt2 = Vertex(seg.v2.x + vec[0], seg.v2.y + vec[1], self, source=VertexSource.auto)
+
+            self.add_vertex(pt1)
+            self.add_vertex(pt2)
+            seg1 = Segment(seg.v1, pt1, mesh=self)
+            seg2 = Segment(pt1, pt2, mesh=self)
+            seg3 = Segment(pt2, seg.v2, mesh=self)
+            return [seg1, seg2, seg3]
+
+        # 一端が鋭角の場合の線分分割
+        i = int(math.floor(math.log(seg.length() / 1.5) / math.log(2.0)))
+        dl = 2.0**i
+        if acute_pos is None:
+            mid_pt = seg.midpt
+        elif acute_pos == SegmentPosition.iend:
+            vec = axis * dl
+            mid_pt = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self, source=VertexSource.auto)
+        else:  # acute_pos == SegmentPosition.jend
+            vec = -axis * dl
+            mid_pt = Vertex(seg.v2.x + vec[0], seg.v2.y + vec[1], self, source=VertexSource.auto)
+
+        # その他の場合の線分分割
+        self.add_vertex(mid_pt)
+        seg1 = Segment(seg.v1, mid_pt, mesh=self)
+        seg2 = Segment(mid_pt, seg.v2, mesh=self)
+        return [seg1, seg2]
+
+    def finite_triangles(self) -> List[Facet]:
+        """包絡三角形を除いた三角形を得る。
+
+        Returns:
+            List[Facet]: 包絡三角形を除いた三角形のリスト
+        """
+        return [tri for tri in self.triangles if not tri.is_infinite()]
+
+    def inside_triangles(self) -> List[Facet]:
+        return [tri for tri in self.triangles
+                if tri.locationtype == TriangleLocationType.inside]
+
+    def finite_vertices(self) -> List[Vertex]:
+        return [vi for vi in self.vertices if not vi.infinite]
+
+    def mark_inout(self):
+        """メッシュのFacetが領域内外情報を更新
+
+        SegmentへのEncroachが解消された状態のメッシュにおいて、
+        メッシュのそれぞれのFacetが領域の内部にあるか外部にあるかの
+        情報を更新する。
+
+        Notes:
+            MeshでのEncroachの存在はあらかじめ解消しておく必要がある。
+        """
+        # Rough register
+        infinite_triangles = []
+        for ti in self.triangles:
+            if ti.is_infinite():
+                ti.locationtype = TriangleLocationType.outside
+                infinite_triangles.append(ti)
+            else:
+                ti.locationtype = TriangleLocationType.inside
+
+        # Setup outside finite triangle register
+        outer_finite_triangles = set()
+        search_edge_que = []
+        for si in self.outerloop.segments:
+            for subsi in si.flatten_child():
+                bound_edge = subsi.opposite()
+                # すでにQueに追加したエッジが境界エッジだった場合は削除
+                if bound_edge in search_edge_que:
+                    search_edge_que.remove(bound_edge)
+                tri = self.edge_triangle_table[bound_edge]
+                if tri.is_infinite(): continue
+                if tri in outer_finite_triangles: continue # 三角形の重複登録を回避
+
+                # 領域に外接する,三角形と探索エッジの登録
+                outer_finite_triangles.add(tri)
+                search_edges = [ei for ei in tri.edges if not ei == bound_edge]
+                search_edge_que.extend(search_edges)
+
+        # Outside finite triangle search
+        while search_edge_que:
+            edge = search_edge_que.pop().opposite()
+            tri = self.edge_triangle_table[edge]
+            if tri.is_infinite(): continue
+            if tri in outer_finite_triangles: continue
+            outer_finite_triangles.add(tri)
+            search_edge_que.extend([ei for ei in tri.edges if not ei == edge])
+
+        # Outside finite triangle register
+        for ti in outer_finite_triangles:
+            ti.locationtype = TriangleLocationType.outside
