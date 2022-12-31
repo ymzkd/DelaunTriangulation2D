@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 from typing import List, Union, Dict
 
-from geometric_trait3 import Point, Triangle, Plane, Tetrahedron
+import numpy as np
+
+from geometric_trait3 import Point, Triangle, Plane, Tetrahedron, Sphere
 
 TOLERANCE = 1.0e-12
 
@@ -40,6 +42,40 @@ class Facet(Triangle):
     def plane(self) -> Plane:
         return Plane(self.v1, self.v2, self.v3)
 
+    def point_at(self, v0: Vertex) -> List[float]:
+        vec02 = self.v2 - v0
+        vec03 = self.v3 - v0
+        t1 = np.cross(vec02.toarray(), vec03.toarray())
+
+        vec03 = self.v3 - v0
+        vec01 = self.v1 - v0
+        t2 = np.cross(vec03.toarray(), vec01.toarray())
+
+        vec01 = self.v1 - v0
+        vec02 = self.v2 - v0
+        t3 = np.cross(vec01.toarray(), vec02.toarray())
+
+        vec12 = self.v2 - self.v1
+        vec13 = self.v3 - self.v1
+        t0 = np.cross(vec12.toarray(),vec13.toarray())
+
+        # inv_t0 = 1.0 / t0
+        t0_norm = np.linalg.norm(t0)
+        l1 = np.dot(t1, t0) / t0_norm
+        l2 = np.dot(t2, t0) / t0_norm
+        l3 = np.dot(t3, t0) / t0_norm
+
+        return [l1, l2, l3]
+
+    def diametric_ball(self) -> Sphere:
+        pln = self.plane()
+        v = np.array(
+            ((self.v1 * self.v1 - self.v2 * self.v2) * 0.5, (self.v1 * self.v1 - self.v3 * self.v3) * 0.5, pln.origin * pln.ez))
+        mat = np.vstack(((self.v1 - self.v2).toarray(), (self.v1 - self.v3).toarray(), pln.ez.toarray()))
+        cent = Point(*np.linalg.solve(mat, v))
+        rad = (self.v1 - cent).length()
+        return Sphere(cent, rad)
+
 
 class TetCell(Tetrahedron[Vertex, Facet]):
     v1: Vertex
@@ -60,20 +96,58 @@ class TetCell(Tetrahedron[Vertex, Facet]):
         f4 = Facet(v1, v2, v3)
         self.facets = [f1, f2, f3, f4]
 
+    # def validate(self):
+    #     if self.is_infinite():
+    #         return
+    #     for i, fi in enumerate(self.facets):
+    #         if fi.plane().signed_distance(self.vertices[i]) > 0.0:
+    #             raise ValueError("facet reverse")
+    #
+    #     if self.orient() < 0.0:
+    #         raise ValueError("tetrahedron reverse")
+
     def is_infinite(self) -> bool:
         return any([vi.infinite for vi in self.vertices])
 
     def is_incircumsphere(self, v: Vertex) -> bool:
         if self.is_infinite():
-            for fi in self.facets:
-                if fi.is_infinite():
-                    continue
-                if fi.plane().signed_distance(v) < 0.0:
-                    return True
-            return False
+            return self.infinite_is_incircumsphere(v)
         else:
             sph = self.outer_sphere()
             return sph.isinside(v)
+
+    def infinite_is_incircumsphere(self, v: Vertex, delta=1.0e-06) -> bool:
+        """Ghost TetrahedronのOpenCircum ball内外判定
+
+        Args:
+            v (Vertex): テスト対象節点
+            delta:
+
+        Returns:
+            bool: テスト対象節点がOpenCircumBall内部であればTrue,その他の場合はFalse
+        Notes:
+            'Delaunay Mesh Generation' Chapter 5.2 (P107)
+        """
+        for fi in self.facets:
+            if fi.is_infinite():
+                continue
+            # facetは外側向き
+            dist = fi.plane().signed_distance(v)
+            if dist < (0.0 - delta):  # TODO: ここも開集合とするために微小数値を引く必要ありそう
+                return True
+            else:
+                ball = fi.diametric_ball()
+                return abs(dist) < delta and ball.isinside(v)
+
+    def is_inside(self, v: Vertex) -> bool:
+        if self.is_infinite():
+            for fi in self.facets:
+                if fi.is_infinite():
+                    continue
+                return fi.plane().signed_distance(v) <= 0.0
+        else:
+            judges = [fi.plane().signed_distance(v) <= 0.0 for fi in self.facets]
+            return all(judges)
 
     def fix_orientation(self):
         if self.orient() < 0.0:
@@ -99,10 +173,10 @@ class Triangulation3:
 
         # Create initial tetrahedron
         gv = Vertex(math.inf, math.inf, math.inf, infinite=True)
-        v1 = vertices.pop()
-        v2 = vertices.pop()
-        v3 = vertices.pop()
-        v4 = vertices.pop()
+        v1 = vertices.pop(0)
+        v2 = vertices.pop(0)
+        v3 = vertices.pop(0)
+        v4 = vertices.pop(0)
         t1 = TetCell(v1, v2, v3, v4, mesh=self)
         t1.fix_orientation()
 
@@ -140,28 +214,26 @@ class Triangulation3:
         return [vi for vi in self.vertices if not vi.infinite]
 
     def remove_tetrahedron(self, tet: TetCell):
-        count_before = len(self.face_adjacent_table)
         _ = self.face_adjacent_table.pop(tet.facets[0])
         _ = self.face_adjacent_table.pop(tet.facets[1])
         _ = self.face_adjacent_table.pop(tet.facets[2])
         _ = self.face_adjacent_table.pop(tet.facets[3])
-        if count_before - len(self.face_adjacent_table) != 4:
-            print("table remove is failed")
         self.tetrahedrons.remove(tet)
 
     def add_tetrahedron(self, tet: TetCell):
-        count_before = len(self.face_adjacent_table)
+        count_num = len(self.face_adjacent_table)
         self.face_adjacent_table[tet.facets[0]] = tet
         self.face_adjacent_table[tet.facets[1]] = tet
         self.face_adjacent_table[tet.facets[2]] = tet
         self.face_adjacent_table[tet.facets[3]] = tet
-        if len(self.face_adjacent_table) - count_before != 4:
-            print("table add is failed")
+        if (len(self.face_adjacent_table) - count_num) != 4:
+            raise ValueError("Table add failed.")
         self.tetrahedrons.append(tet)
 
     def getIncludeTet(self, pt: Vertex) -> Union[TetCell, None]:
         for tet_i in self.tetrahedrons:
-            if tet_i.is_incircumsphere(pt):
+            # if tet_i.is_incircumsphere(pt):
+            if tet_i.is_inside(pt):
                 return tet_i
         else:
             return None
@@ -212,4 +284,5 @@ class Triangulation3:
                 self.dig_cavity(u, fi)
         else:
             # step4
-            self.add_tetrahedron(TetCell(u, f_tgt.v2, f_tgt.v1, f_tgt.v3, self))
+            new_tet = TetCell(u, f_tgt.v2, f_tgt.v1, f_tgt.v3, self)
+            self.add_tetrahedron(new_tet)

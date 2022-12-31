@@ -297,13 +297,13 @@ class Facet(Triangle[Vertex]):
         """
         if self.is_infinite():
             # 節点が半平面に位置するか？
-            return self.__infinite_is_incercumcircle(v, 0.000001)
+            return self.__infinite_is_incircumcircle(v, 0.000001)
         else:
             # 三角形外接円に節点が含まれるか？
             cir = self.outer_circle()
             return cir.ispoint_inside(v.toarray())
 
-    def __infinite_is_incercumcircle(self, v: Vertex, delta=0.0001) -> bool:
+    def __infinite_is_incircumcircle(self, v: Vertex, delta=0.0001) -> bool:
         """infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置するか？
 
         infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置する場合はTrue,

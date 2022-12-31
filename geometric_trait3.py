@@ -40,7 +40,7 @@ class Vector:
         return math.sqrt(self.x**2 + self.y**2 + self.z**2)
 
     def __str__(self):
-        return f'x: {self.x}, y: {self.y}, z: {self.z}'
+        return f'({self.x}, {self.y}, {self.z})'
 
     def outer_product(self, other: Vector):
         """
@@ -113,13 +113,13 @@ class Sphere:
         self.center = center
         self.radius = radius
 
-    def isinside(self, v: Point) -> bool:
+    def isinside(self, v: Point, delta=1.0e-06) -> bool:
         d1 = self.center.distance(v)
-        return d1 <= self.radius
+        return d1 < (self.radius - delta)  # TODO: ここで少し引かないと開球の内部判定にならないときあり
 
 
 class Plane:
-    """
+    """中心点と2つの軸ベクトルを持ち、三次元空間内の平面を表す。
     平面。というか局所座標系になりつつある。
     """
 
@@ -127,7 +127,7 @@ class Plane:
         ex = pt_x - origin
         ex *= 1.0 / ex.length()
         ey = pt_y - origin
-        ey = ey - (ey * ex) * ey
+        ey = ey - (ey * ex) * ex
         ey *= 1.0 / ey.length()
 
         self.ex = ex
@@ -192,6 +192,31 @@ class Triangle(Generic[PointTrait]):
     @v3.setter
     def v3(self, value: PointTrait):
         self.vertices[2] = value
+
+    def area(self) -> float:
+        v12 = (self.v2 - self.v1).toarray()
+        v13 = (self.v3 - self.v1).toarray()
+        cross = np.cross(v12, v13)
+        return np.linalg.norm(cross) * 0.5
+
+    def normal(self) -> Vector:
+        v12 = (self.v2 - self.v1).toarray()
+        v13 = (self.v3 - self.v1).toarray()
+        cross = np.cross(v12, v13)
+        normal = cross / np.linalg.norm(cross)
+        return Vector(normal[0], normal[1], normal[2])
+
+    def plane(self) -> Plane:
+        return Plane(self.v1, self.v2, self.v3)
+
+    def diametric_ball(self) -> Sphere:
+        pln = self.plane()
+        v = np.array(
+            ((self.v1 * self.v1 - self.v2 * self.v2) * 0.5, (self.v1 * self.v1 - self.v3 * self.v3) * 0.5, pln.origin * pln.ez))
+        mat = np.vstack(((self.v1 - self.v2).toarray(), (self.v1 - self.v3).toarray(), pln.ez.toarray()))
+        cent = Point(*np.linalg.solve(mat, v))
+        rad = (self.v1 - cent).length()
+        return Sphere(cent, rad)
 
     def __hash__(self):
         """
@@ -274,23 +299,17 @@ class Tetrahedron(Generic[PointTrait, FacetTrait]):
         return Sphere(center, rad)
 
     def orient(self) -> float:
-        va = self.v1 - self.v2
-        vb = self.v1 - self.v3
-        vc = self.v1 - self.v4
-        return det3x3(va, vb, vc)
+        """四面体の節点順が逆転していなければ正、逆転していたら負の値が返ってくる.
 
+        Returns:
+            float
+        """
+        mat = np.array([
+            (self.v3 - self.v1).toarray(),
+            (self.v2 - self.v1).toarray(),
+            (self.v4 - self.v1).toarray()
+        ])
+        return np.linalg.det(mat)
 
-def det3x3(v1: Vector, v2: Vector, v3: Vector):
-    """
-    行列式の計算
-    | v1[0] v2[0] v3[0] |
-    | v1[1] v2[1] v3[1] |
-    | v1[2] v2[2] v3[2] |
-
-    Parameters
-    ----------
-    v1, v2, v3: Vector3d
-
-    """
-    return v1.x * v2.y * v3.z + v1.y * v2.z * v3.x + v1.z * v2.x * v3.y \
-           - v1.x * v2.z * v3.y - v1.y * v2.x * v3.z - v1.z * v2.y * v3.x
+    def volume(self) -> float:
+        return abs(self.orient() / 6.0)

@@ -8,9 +8,6 @@ from geometric_trait3 import Point, Plane, Vector, Line, Triangle, Sphere
 
 
 class Vertex(Point):
-    # x: float
-    # y: float
-    # z: float
     infinite: bool
 
     def __init__(self, x: float, y: float, z: float, infinite: bool = False):
@@ -26,6 +23,33 @@ class Vertex(Point):
     @staticmethod
     def ghost_vertex() -> Vertex:
         return Vertex(math.inf, math.inf, math.inf, infinite=True)
+
+
+class Edge(Line):
+    def __init__(self, v1: Vertex, v2: Vertex, mesh: TriangulationPlane = None):
+        super(Edge, self).__init__(v1, v2)
+        if mesh:
+            self.plane = mesh.plane
+        self.mesh = mesh
+
+    def opposite(self) -> Edge:
+        return Edge(self.v2, self.v1, self.mesh)
+
+    def ispt_rightside(self, pt) -> bool:
+        """
+
+        Args:
+            pt: 節点座標を表す三次元のベクトル
+
+        Returns:
+            TriangulationPlaneの平面上で入力点がこのエッジの右側にあるかどうか？
+        """
+        vav = pt - self.v1.toarray()
+        vab = self.v2.toarray() - self.v1.toarray()
+        return (self.plane.ez.toarray() @ np.cross(vav, vab)) >= 0.0
+
+    def is_infinite(self) -> bool:
+        return any((self.v1.infinite, self.v2.infinite))
 
 
 class Facet(Triangle):
@@ -65,55 +89,6 @@ class Facet(Triangle):
 
     def is_infinite(self) -> bool:
         return any([vi.infinite for vi in self.vertices])
-
-    def diametric_ball(self) -> Sphere:
-        pln = Plane(self.v1, self.v2, self.v3)
-        v = np.array(
-            ((self.v1 * self.v1 - self.v2 * self.v2) * 0.5, (self.v1 * self.v1 - self.v3 * self.v3) * 0.5, pln.origin * pln.ez))
-        mat = np.vstack(((self.v1 - self.v2).toarray(), (self.v1 - self.v3).toarray(), pln.ez.toarray()))
-        cent = Point(*np.linalg.solve(mat, v))
-        rad = (self.v1 - cent).length()
-        return Sphere(cent, rad)
-
-    def area(self) -> float:
-        v12 = (self.v2 - self.v1).toarray()
-        v13 = (self.v3 - self.v1).toarray()
-        cross = np.cross(v12, v13)
-        return np.linalg.norm(cross) * 0.5
-
-    def normal(self) -> Vector:
-        v12 = (self.v2 - self.v1).toarray()
-        v13 = (self.v3 - self.v1).toarray()
-        cross = np.cross(v12, v13)
-        normal = cross / np.linalg.norm(cross)
-        return Vector(normal[0], normal[1], normal[2])
-
-
-class Edge(Line):
-    def __init__(self, v1: Vertex, v2: Vertex, mesh: TriangulationPlane = None):
-        super(Edge, self).__init__(v1, v2)
-        if mesh:
-            self.plane = mesh.plane
-        self.mesh = mesh
-
-    def opposite(self) -> Edge:
-        return Edge(self.v2, self.v1, self.mesh)
-
-    def ispt_rightside(self, pt) -> bool:
-        """
-
-        Args:
-            pt: 節点座標を表す三次元のベクトル
-
-        Returns:
-            TriangulationPlaneの平面上で入力点がこのエッジの右側にあるかどうか？
-        """
-        vav = pt - self.v1.toarray()
-        vab = self.v2.toarray() - self.v1.toarray()
-        return (self.plane.ez.toarray() @ np.cross(vav, vab)) >= 0.0
-
-    def is_infinite(self) -> bool:
-        return any((self.v1.infinite, self.v2.infinite))
 
 
 class TriangulationPlane:
