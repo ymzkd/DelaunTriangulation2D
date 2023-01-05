@@ -7,7 +7,7 @@ import pyvista
 import mesh2
 import triangulation2 as tr2
 import triangulation3 as tr3
-import triangulation_plane as trp
+import mesh3
 
 
 def plot_triangulation(triangles: List[tr2.Facet]=[], segments=[], triangulate=None):
@@ -52,12 +52,13 @@ def plot_triangulation(triangles: List[tr2.Facet]=[], segments=[], triangulate=N
 
         plt.draw()
 
+    # Plot Triangle
     for tri_i in triangles:
         points = [[vi.x, vi.y] for vi in tri_i.vertices]
         patch = patches.Polygon(
             xy=points, closed=True, facecolor='lightgreen', edgecolor='black')
         ax.add_patch(patch)
-    
+
     segs = np.zeros((len(segments), 2, 2))
     for i, si in enumerate(segments):
         segs[i, 0, 0] = si.v1.x
@@ -76,6 +77,56 @@ def plot_triangulation(triangles: List[tr2.Facet]=[], segments=[], triangulate=N
         
     line_segments = LineCollection(segs, linewidths=(2), linestyle='solid', edgecolor='red', alpha=0.5)
     ax.add_collection(line_segments)
+
+    ax.autoscale()
+    ax.set_aspect('equal')
+    plt.show()
+
+
+def plot_triangulation2d(tr: tr2.Triangulation):
+    from matplotlib import pyplot as plt
+    from matplotlib import patches
+    from matplotlib.collections import LineCollection
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # Plot Triangle
+    for tri_i in tr.finite_triangles():
+        points = [[vi.x, vi.y] for vi in tri_i.vertices]
+        patch = patches.Polygon(
+            xy=points, closed=True, facecolor='lightgreen', edgecolor='black')
+        ax.add_patch(patch)
+
+    # Plot Voronoi
+    for vi in tr.vertices:
+        triangles = tr.incident_faces(vi)
+        if any(tri.is_infinite() for tri in triangles):
+            continue
+
+        vertices = [tri.outer_circle().center for tri in triangles]
+        points = [[vi.x, vi.y] for vi in vertices]
+        patch = patches.Polygon(
+            xy=points, closed=True, edgecolor='blue', fill=False)
+        ax.add_patch(patch)
+
+    # segs = np.zeros((len(tr. segments), 2, 2))
+    # for i, si in enumerate(segments):
+    #     segs[i, 0, 0] = si.v1.x
+    #     segs[i, 0, 1] = si.v1.y
+    #     segs[i, 1, 0] = si.v2.x
+    #     segs[i, 1, 1] = si.v2.y
+    #
+    # if triangulate:
+    #     for tri_i in triangulate.triangles:
+    #         points = [[vi.x, vi.y] for vi in tri_i.vertices]
+    #         patch = patches.Polygon(
+    #             xy=points, closed=True, facecolor='white', edgecolor='black')
+    #         # patchs.append(patch)
+    #         ax.add_patch(patch)
+    #     plt.connect('motion_notify_event', motion)
+
+    # line_segments = LineCollection(segs, linewidths=(2), linestyle='solid', edgecolor='red', alpha=0.5)
+    # ax.add_collection(line_segments)
 
     ax.autoscale()
     ax.set_aspect('equal')
@@ -141,6 +192,7 @@ def plot_mesh2(mesh: mesh2.Mesh):
 
     plotter = pv.Plotter()
 
+    # Plot Vertices
     fixed_points = []
     auto_points = []
     mesh_vertices = mesh.finite_vertices()
@@ -154,7 +206,7 @@ def plot_mesh2(mesh: mesh2.Mesh):
     if auto_points:
         plotter.add_mesh(pv.PointSet(np.array(auto_points)), color='blue', label='Auto Point')
 
-    # mesh points
+    # Plot Meshes
     points = []
     for vi in mesh_vertices:
         points.append([vi.x, vi.y, 0.0])
@@ -177,24 +229,32 @@ def plot_mesh2(mesh: mesh2.Mesh):
                      scalar_bar_args=sargs,
                      show_edges=True, color=True, line_width=2.5, label="Domain")
 
-    # Plot segments
+    # Plot Segments
+    for seg in mesh.segments:
+        outer_points = [[vi.x, vi.y, 0.0] for vi in [seg.v1, seg.v2]]
+        outer_points = np.array(outer_points)
+        line = pv.lines_from_points(outer_points)
+        plotter.add_mesh(line, color='lime', line_width=4, label="Segment")
+
+    # Plot OuterLoop
     outer_points = [[vi.x, vi.y, 0.0] for vi in mesh.outerloop.vertices]
     outer_points = np.array(outer_points)
-    LINETYPE = 3
-    outer_cells = []
-    seg_num = len(mesh.outerloop.segments)
-    outer_celltypes = np.array([LINETYPE] * seg_num)
-    for i in range(seg_num):
-        outer_cells.append([2, i, (i+1) % seg_num])
-    outer_cells = np.hstack(outer_cells)
-    grid = pv.UnstructuredGrid(outer_cells, outer_celltypes, outer_points)
-    plotter.add_mesh(grid, color='cyan', line_width=4, label="OuterLoop")
+    lines = pv.lines_from_points(outer_points, close=True)
+    plotter.add_mesh(lines, color='cyan', line_width=4, label="OuterLoop")
 
+    # Plot Innerloops
+    for loop in mesh.innerloops:
+        loop_points = [[vi.x, vi.y, 0.0] for vi in loop.vertices]
+        loop_points = np.array(loop_points)
+        lines = pv.lines_from_points(loop_points, close=True)
+        plotter.add_mesh(lines, color='magenta', line_width=4, label="InnerLoop")
+
+    # Plot Show
     plotter.add_legend(size=(0.1,0.1))
     plotter.show()
 
 
-def plot_triangulation_plane(mesh: trp.TriangulationPlane):
+def plot_triangulation_plane(mesh: mesh3.TriangulationPlane):
     import pyvista as pv
     # mesh points
     points = []
@@ -268,6 +328,7 @@ def plot_triangulation3(tri3: tr3.Triangulation3):
     points = np.array([[vi.x, vi.y, vi.z] for vi in vertices])
     cells = []
     # cells2 = []
+    rad_edge_ratios = []
     count_finitecell = 0
     for ti in tri3.finite_tetrahedrons():
 
@@ -276,6 +337,7 @@ def plot_triangulation3(tri3: tr3.Triangulation3):
         i3 = vertices.index(ti.v3)
         i4 = vertices.index(ti.v4)
         cells.append([4, i1, i2, i3, i4])
+        rad_edge_ratios.append(ti.edge_radius_ratio())
         count_finitecell += 1
 
     cells = np.hstack(cells)
@@ -300,7 +362,7 @@ def plot_triangulation3(tri3: tr3.Triangulation3):
 
     p = pv.Plotter()
     p.set_background("lightgray")
-    p.add_mesh(grid1, show_edges=True, color='red')
+    p.add_mesh(grid1, scalars=np.array(rad_edge_ratios), show_edges=True, color='red')
     # p.add_mesh(grid2, show_edges=True, opacity=0.6)
 
     # Add Plane Widget

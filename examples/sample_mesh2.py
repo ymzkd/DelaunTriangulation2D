@@ -7,7 +7,7 @@ import examples.develop_helper as dh
 seed = random.randint(0, 99999999)
 print(f"random seed: {seed}")
 np.random.seed(seed)
-# np.random.seed(39135982)
+# np.random.seed(5905689)
 
 v1 = mesh2.Vertex(-0.3, 0.0)
 v2 = mesh2.Vertex(1.0, 0.0)

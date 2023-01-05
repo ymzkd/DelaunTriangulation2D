@@ -34,6 +34,19 @@ class Vector:
     def __rmul__(self, other):
         return Vector(self.x * other, self.y * other)
 
+    def __truediv__(self, other):
+        if isinstance(other, (int, float)):
+            return Vector(self.x / other, self.y / other)
+        else:
+            raise ValueError(f'Only division by integer or float is allowed.({other})')
+
+    @classmethod
+    def zero(cls) -> Vector:
+        return Vector(0.0, 0.0)
+
+    def outer_product(self, other: Vector):
+        return self.x * other.y - self.y * other.x
+
     def length(self) -> float:
         return math.sqrt(self.x**2 + self.y**2)
 

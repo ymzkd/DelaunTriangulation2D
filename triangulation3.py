@@ -5,7 +5,7 @@ from typing import List, Union, Dict
 
 import numpy as np
 
-from geometric_trait3 import Point, Triangle, Plane, Tetrahedron, Sphere
+from geometric_trait3 import Point, Triangle, Plane, Tetrahedron, Sphere, Line
 
 TOLERANCE = 1.0e-12
 
@@ -268,10 +268,7 @@ class Triangulation3:
             tet = self.face_adjacent_table[f_base]
         except KeyError:
             # step2
-            # if f_tgt.is_infinite():
-            #     tet_new = Tetrahedron(u, f_tgt.v1, f_tgt.v2, f_tgt.v3, self)
-            #     self.add_tetrahedron(tet_new)
-            # self.tetrahedrons.append(tet_new)
+            # Triangle is already deleted
             return
 
         if tet.is_incircumsphere(u):

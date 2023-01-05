@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import copy
+from enum import Enum
 import math
 from typing import List, Union, Dict, Set
 
 import numpy as np
 
-from geometric_trait3 import Point, Triangle, Plane, Tetrahedron, Line, Sphere
-import triangulation_plane as tp
+from geometric_trait3 import Point, Triangle, Plane, Tetrahedron, Line, Sphere, Vector
 
 TOLERANCE = 1.0e-12
+
+
+class FacetLocationType(Enum):
+    """このFacetがメッシュの領域内部にあるか、外部に属するかの属性
+    """
+    undefined = 0
+    inside = 1
+    outside = 2
 
 
 class Vertex(Point):
@@ -21,11 +30,71 @@ class Vertex(Point):
         super(Vertex, self).__init__(x, y, z)
         self.infinite = infinite
 
+    def transform(self, transmat) -> Vertex:
+        xyzw = np.ones([4])
+        xyzw[0:3] = self.toarray()
+        xyzw = transmat @ xyzw
+        return Vertex(*xyzw[:3], infinite=self.infinite)
+
+    @staticmethod
+    def ghost_vertex() -> Vertex:
+        return Vertex(math.inf, math.inf, math.inf, infinite=True)
+
 
 class Edge(Line[Vertex]):
     def __init__(self, v1: Vertex, v2: Vertex, mesh: Mesh = None):
         super(Edge, self).__init__(v1, v2)
         self.mesh = mesh
+
+    def opposite(self) -> Edge:
+        return Edge(self.v2, self.v1, self.mesh)
+
+    def ispt_rightside(self, pt: Point, pln: Plane) -> bool:
+        """入力点が入力平面上でこのエッジの右半開空間に位置するか
+
+        Args:
+            pt (Point): 節点座標を表す三次元のベクトル
+            pln (Plane): このエッジが配置される平面
+
+        Returns:
+            TriangulationPlaneの平面上で入力点がこのエッジの右側にあるかどうか？
+        """
+        vav = pt.toarray() - self.v1.toarray()
+        vab = self.v2.toarray() - self.v1.toarray()
+        return (pln.ez.toarray() @ np.cross(vav, vab)) > 1.0e-6
+
+    def distance_inplane(self, pt: Point, pln: Plane) -> float:
+        """入力点の入力平面上でのこのエッジとの距離
+
+        Args:
+            pt (Point): 節点座標を表す三次元のベクトル
+            pln (Plane): このエッジが配置される平面
+
+        Returns:
+            float: 入力点の入力平面上でのこのエッジとの距離
+        """
+        vav = pt.toarray() - self.v1.toarray()
+        vab = self.v2.toarray() - self.v1.toarray()
+        area = (pln.ez.toarray() @ np.cross(vav, vab))
+        return area / np.linalg.norm(vab)
+
+    def is_infinite(self) -> bool:
+        return any((self.v1.infinite, self.v2.infinite))
+
+    @property
+    def midpt(self) -> Vertex:
+        x = (self.v1.x + self.v2.x) * 0.5
+        y = (self.v1.y + self.v2.y) * 0.5
+        z = (self.v1.z + self.v2.z) * 0.5
+        return Vertex(x, y, z)
+
+    def diametric_ball(self) -> Sphere:
+        """線分を直径とした円を生成
+
+        Returns:
+            Circle: 線分を直径とした円
+        """
+        return Sphere(self.midpt, self.length() * 0.5)
 
 
 class Segment(Edge):
@@ -110,11 +179,14 @@ class Facet(Triangle):
     v2: Vertex
     v3: Vertex
 
-    def __init__(self, v1: Vertex, v2: Vertex, v3: Vertex):
+    def __init__(self, v1: Vertex, v2: Vertex, v3: Vertex, mesh: Union[TriangulationPlane, Mesh, None] = None):
         super(Facet, self).__init__(v1, v2, v3)
+        self.mesh = mesh
+        if (not self.is_infinite()) and self.area() < 1.0e-6:
+            raise ValueError(f"Facet area is too small {self}")
 
     def opposite(self) -> Facet:
-        return Facet(self.v3, self.v2, self.v1)
+        return Facet(self.v3, self.v2, self.v1, self.mesh)
 
     def is_infinite(self) -> bool:
         return any([self.v1.infinite, self.v2.infinite, self.v3.infinite])
@@ -144,6 +216,56 @@ class Facet(Triangle):
 
         return [l1, l2, l3]
 
+    def get_edge(self, idx: int) -> Edge:
+        if idx == 0:
+            return Edge(self.v1, self.v2, self.mesh)
+        elif idx == 1:
+            return Edge(self.v2, self.v3, self.mesh)
+        else:
+            return Edge(self.v3, self.v1, self.mesh)
+
+    def is_incircumcircle(self, v: Vertex) -> bool:
+        """節点vがこの三角形の外接円の内部に位置するか
+            節点vがこの三角形の外接円の内部に位置するかを判定。三角形がGhostTriangleの場合は
+            finite edgeの半平面(左側・CCW)に節点が位置すれば外接円内部と判定する。
+
+        Args:
+            v: テスト対象の節点
+
+        Returns:
+            節点vがこの三角形の内部に位置する場合はTrue, その他の場合はFalse
+        """
+        if self.is_infinite():
+            return self.infinite_is_incircumball(v)
+            # # 節点が半平面に位置するか？
+            # vid_inf = [v.infinite for v in self.vertices].index(True)
+            # seg = self.get_edge((vid_inf + 1) % 3)
+            # return not(seg.ispt_rightside(v, self.mesh.plane))
+        else:
+            # 三角形外接円に節点が含まれるか？
+            sph = self.diametric_ball()
+            return sph.isinside(v)
+
+    def infinite_is_incircumball(self, v: Vertex, delta=1.0e-06) -> bool:
+        # 節点が半平面に位置するか？
+        vid_inf = [v.infinite for v in self.vertices].index(True)
+        seg = self.get_edge((vid_inf + 1) % 3)
+
+        dist = seg.distance_inplane(v, self.mesh.plane)
+        if dist < -delta:
+            return True
+        else:
+            ball = seg.diametric_ball()
+            return abs(dist) < delta and ball.isinside(v, delta)
+
+        # dist = fi.plane().signed_distance(v)
+        # if dist < (0.0 - delta):  # TODO: ここも開集合とするために微小数値を引く必要ありそう
+        #     return True
+        # else:
+        #     ball = fi.diametric_ball()
+        #     return abs(dist) < delta and ball.isinside(v)
+        # return not (seg.ispt_rightside(v, self.mesh.plane))
+
 
 class TetCell(Tetrahedron[Vertex, Facet]):
     v1: Vertex
@@ -157,10 +279,10 @@ class TetCell(Tetrahedron[Vertex, Facet]):
                  mesh: Mesh = None, initialize=False):
         super(TetCell, self).__init__(v1, v2, v3, v4)
         self.mesh = mesh
-        f1 = Facet(v2, v4, v3)
-        f2 = Facet(v1, v3, v4)
-        f3 = Facet(v1, v4, v2)
-        f4 = Facet(v1, v2, v3)
+        f1 = Facet(v2, v4, v3, self.mesh)
+        f2 = Facet(v1, v3, v4, self.mesh)
+        f3 = Facet(v1, v4, v2, self.mesh)
+        f4 = Facet(v1, v2, v3, self.mesh)
         self.facets = [f1, f2, f3, f4]
         if not initialize:
             if not self.is_infinite():
@@ -210,21 +332,46 @@ class TetCell(Tetrahedron[Vertex, Facet]):
     def fix_orientation(self):
         if self.orient() < 0.0:
             self.vertices[:3], self.vertices[3] = self.vertices[1:], self.vertices[0]
-            f1 = Facet(self.v2, self.v4, self.v3)
-            f2 = Facet(self.v1, self.v3, self.v4)
-            f3 = Facet(self.v1, self.v4, self.v2)
-            f4 = Facet(self.v1, self.v2, self.v3)
+            f1 = Facet(self.v2, self.v4, self.v3, self.mesh)
+            f2 = Facet(self.v1, self.v3, self.v4, self.mesh)
+            f3 = Facet(self.v1, self.v4, self.v2, self.mesh)
+            f4 = Facet(self.v1, self.v2, self.v3, self.mesh)
             self.facets = [f1, f2, f3, f4]
 
 
 class Polygon:
+    """三次元上の多角形ポリゴン
+    n個の節点のリストにより、三次元上の多角形ポリゴンを表す。
+    """
     def __init__(self, vertices: List[Vertex]):
         self.vertices = vertices
 
     @property
-    def segments(self) -> Set[Segment]:
+    def segments(self) -> List[Segment]:
         vertex_num = len(self.vertices)
-        return set(Segment(self.vertices[i], self.vertices[(i+1)%vertex_num]) for i in range(vertex_num))
+        return [Segment(self.vertices[i], self.vertices[(i+1) % vertex_num]) for i in range(vertex_num)]
+
+    @property
+    def count(self) -> int:
+        return len(self.vertices)
+
+    def _area_vector(self) -> Vector:
+        sum_vec = Vector.zero()
+        for i in range(self.count):
+            vi = self.vertices[i]
+            vi1 = self.vertices[(i + 1) % self.count]
+            sum_vec += vi.outer_product(vi1)
+        else:
+            sum_vec *= 0.5
+        return sum_vec
+
+    @property
+    def area(self) -> float:
+        return self._area_vector() .length()
+
+    @property
+    def normal(self) -> Vector:
+        return self._area_vector() / self.area
 
 
 class Mesh:
@@ -237,8 +384,8 @@ class Mesh:
     vertices: List[Vertex]
     tetrahedrons: List[TetCell]
     face_adjacent_table: Dict[Facet, TetCell]
-    segment_plc_table: Dict[Segment, List[tp.TriangulationPlane]]
-    plc_triangulations: List[tp.TriangulationPlane]
+    segment_plc_table: Dict[Segment, List[TriangulationPlane]]
+    plc_triangulations: List[TriangulationPlane]
 
     def __init__(self, vertices: List[Vertex], polygons: List[Polygon]):
 
@@ -253,10 +400,10 @@ class Mesh:
         self.plc_triangulations = []
         self.segment_plc_table = {}
         for pi in polygons:
-            plc_triangulate = tp.TriangulationPlane(pi.vertices)
+            plc_triangulate = TriangulationPlane(pi.vertices)
             self.plc_triangulations.append(plc_triangulate)
             for si in pi.segments:
-                if si in self.segment_plc_table:
+                if si in self.segment_plc_table.keys():
                     self.segment_plc_table[si].append(plc_triangulate)
                 else:
                     self.segment_plc_table[si] = [plc_triangulate]
@@ -265,27 +412,29 @@ class Mesh:
         self.resolve_segment_encroach()
 
         # Step4 resolve subpolygon encroach
+        self.resolve_face_encroach()
 
         # Step5 refine tetrahedron
 
     def triangulate(self, vertices: List[Vertex]):
-        if len(vertices) < 4:
+        insert_vertices = copy.copy(vertices)
+        if len(insert_vertices) < 4:
             print("4つ以上の節点入力が必要")
 
         # Create initial tetrahedron
         gv = Vertex(math.inf, math.inf, math.inf, infinite=True)
-        v1 = vertices.pop()
-        v2 = vertices.pop()
-        v3 = vertices.pop()
+        v1 = insert_vertices.pop()
+        v2 = insert_vertices.pop()
+        v3 = insert_vertices.pop()
 
         v4 = None; t1 = None
-        for v in vertices:
+        for v in insert_vertices:
             v4 = v
             t1 = TetCell(v1, v2, v3, v4, mesh=self, initialize=True)
             t1.fix_orientation()
             if t1.volume() > 1.0e-6:
                 break
-        vertices.remove(v4)
+        insert_vertices.remove(v4)
 
         gt1 = TetCell(gv, t1.v1, t1.v2, t1.v3, mesh=self)
         gt2 = TetCell(gv, t1.v1, t1.v3, t1.v4, mesh=self)
@@ -299,7 +448,7 @@ class Mesh:
         self.add_tetrahedron(gt3)
         self.add_tetrahedron(gt4)
 
-        for i, vi in enumerate(vertices):
+        for i, vi in enumerate(insert_vertices):
             self.add_vertex(vi)
 
     def check_triangles(self):
@@ -353,13 +502,13 @@ class Mesh:
 
         return [seg1, seg2]
 
-    def getIncludeTet(self, pt: Vertex) -> Union[TetCell, None]:
+    def getIncludeTet(self, pt: Vertex) -> TetCell:
         for tet_i in self.tetrahedrons:
             # if tet_i.is_incircumsphere(pt):
             if tet_i.is_inside(pt):
                 return tet_i
         else:
-            return None
+            raise ValueError(f"Cant find {pt} included tetrahedron.")
 
     def add_vertex(self, v: Vertex):
         """
@@ -391,10 +540,7 @@ class Mesh:
             tet = self.face_adjacent_table[f_base]
         except KeyError:
             # step2
-            # if f_tgt.is_infinite():
-            #     tet_new = Tetrahedron(u, f_tgt.v1, f_tgt.v2, f_tgt.v3, self)
-            #     self.add_tetrahedron(tet_new)
-            # self.tetrahedrons.append(tet_new)
+            # Triangle is already deleted
             return
 
         if tet.is_incircumsphere(u):
@@ -417,25 +563,169 @@ class Mesh:
 
     def pick_segment_encroach(self) -> Segment | None:
         for vi in self.finite_vertices():
-            for seg_i in self.segment_plc_table:
-                if vi is seg_i.v1 or vi is seg_i.v2:
-                    continue
-                if s := seg_i.vertex_encroached(vi):
-                    return s
+            if seg := self.segment_encroach(vi):
+                return seg
+        return None
+
+    def segment_encroach(self, v: Vertex) -> Segment | None:
+        for seg_i in self.segment_plc_table:
+            if v is seg_i.v1 or v is seg_i.v2:
+                continue
+            if s := seg_i.vertex_encroached(v):
+                return s
         return None
 
     def resolve_face_encroach(self):
         while f := self.pick_face_encroach():
             # segmentのencroachが優先なので、facetの重心がsegmentをencroachしていないか調べる
-            # segmentをencroachしていたらsegmentのencroachを解消して再度ループ
-            # それ以外の場合はfacetのencroachを以下で解消
+            new_pt = f.diametric_ball().center
+            if seg := self.segment_encroach(new_pt):
+                segments = self.split_segment(seg)
+                seg.children = segments
+                # segmentをencroachしていたらsegmentのencroachを解消して再度ループ
+                #   - Segment分割
+                #   - 各PLCのTriangulationに分割点を挿入
+                #   - 全体のTriangulationに分割点を挿入
+            else:
+                trig_pln = f.mesh
+                vertex = Vertex(new_pt.x, new_pt.y, new_pt.z)
+                # それ以外の場合はfacetのencroachを以下で解消
                 # encroachが見つかったfaceの属する平面Triangulationにfacetの重心を追加
+                trig_pln.add_vertex(vertex)
                 # facetの重心を全体のTriangulationにも追加
-            pass
+                self.add_vertex(vertex)
 
-    # def pick_face_encroach(self) -> Facet | None:
-    #     for vi in self.finite_vertices():
-    #         for tri_i in self.plc_triangulations:
-    #             if fc_i := tri_i.encroached_facet(vi):
-    #                 return fc_i
-    #     return None
+    def pick_face_encroach(self) -> Facet | None:
+        for vi in self.finite_vertices():
+            for tri_i in self.plc_triangulations:
+                if fc_i := tri_i.encroached_facet(vi):
+                    return fc_i
+        return None
+
+
+class TriangulationPlane:
+    triangles: List[Facet]
+    edge_triangle_table: Dict[Edge, Facet]
+
+    def __init__(self, vertices: List[Vertex]):
+        insert_vertices = copy.copy(vertices)
+        # self.vertices = vertices
+        self.edge_triangle_table = {}
+        self.triangles = []
+
+        gv = Vertex.ghost_vertex()
+        v1 = insert_vertices.pop(0)
+        v2 = insert_vertices.pop(0)
+        v3 = insert_vertices.pop(0)
+
+        self.plane = Plane(v1, v2, v3)
+        t1 = Facet(v1, v2, v3, mesh=self)
+        gt1 = Facet(gv, t1.v2, t1.v1, mesh=self)
+        gt2 = Facet(gv, t1.v3, t1.v2, mesh=self)
+        gt3 = Facet(gv, t1.v1, t1.v3, mesh=self)
+        self.vertices = [gv, v1, v2, v3]
+        self.add_triangle(t1)
+        self.add_triangle(gt1)
+        self.add_triangle(gt2)
+        self.add_triangle(gt3)
+
+        for vi in insert_vertices:
+            self.add_vertex(vi)
+
+        print("end triag")
+
+    def remove_triangle(self, tri: Facet):
+        _ = self.edge_triangle_table.pop(tri.get_edge(0))
+        _ = self.edge_triangle_table.pop(tri.get_edge(1))
+        _ = self.edge_triangle_table.pop(tri.get_edge(2))
+        self.triangles.remove(tri)
+
+    def add_triangle(self, tri: Facet):
+        e1 = tri.get_edge(0)
+        e2 = tri.get_edge(1)
+        e3 = tri.get_edge(2)
+        self.edge_triangle_table[e1] = tri
+        self.edge_triangle_table[e2] = tri
+        self.edge_triangle_table[e3] = tri
+        self.triangles.append(tri)
+
+    def locate(self, v: Vertex) -> Facet:
+        """任意の点を外接円内部に含む三角形を探索する。
+        もし、既存のTriangulationの外側に点が挿入された場合は、
+        半平面に挿入節点を含むGhost Triangleを返す。
+
+        Args:
+            v (Vertex): 頂点
+
+        Returns:
+            Facet: 入力節点を含む三角形
+        """
+        for tri in self.triangles:
+            if tri.is_incircumcircle(v):
+                return tri
+        else:
+            raise Exception(f"No triangles include point coordinate: [{v.x},{v.y},{v.z}]")
+
+    def dig_cavity(self, u: Vertex, edge: Edge):
+        """
+        Triangulation3内で追加節点uを四面体の外接球に含む四面体群を探索する。
+        Args:
+            u(Vertex): 追加節点
+            edge(Segment): 探索起点となる四面体面のFacetDescriptor
+
+        Notes:
+            'Delaunay Mesh Generation' Chapter3.4
+        """
+        base_edge = edge.opposite()
+        try:
+            tri = self.edge_triangle_table[base_edge]
+        except KeyError:
+            # step2
+            # Triangle is already deleted
+            return
+
+        if tri.is_incircumcircle(u):
+            edges = [tri.get_edge(i) for i in range(3)]
+            self.remove_triangle(tri)
+            for seg in edges:
+                if seg == base_edge:
+                    continue
+                self.dig_cavity(u, seg)
+        else:
+            self.add_triangle(Facet(u, edge.v1, edge.v2, mesh=self))
+
+    def add_vertex(self, v: Vertex) -> None:
+        """頂点vを挿入
+
+        Args:
+            v (Vertex): 挿入節点
+        """
+        tri = self.locate(v)
+        self.vertices.append(v)
+        edges = [tri.get_edge(i) for i in range(3)]
+        self.remove_triangle(tri)
+        for edge in edges:
+            self.dig_cavity(v, edge)
+
+    def finite_triangles(self) -> List[Facet]:
+        """包絡三角形を除いた三角形を得る。
+
+        Returns:
+            List[Facet]: 包絡三角形を除いた三角形のリスト
+        """
+        triangles = []
+        for tri in self.triangles:
+            if tri.is_infinite():
+                continue
+            triangles.append(tri)
+
+        return triangles
+
+    def encroached_facet(self, v: Vertex) -> Facet | None:
+        for fi in self.finite_triangles():
+            if any([vi == v for vi in fi.vertices]):
+                return None
+            sph = fi.diametric_ball()
+            if sph.isinside(v):
+                return fi
+        return None

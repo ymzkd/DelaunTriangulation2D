@@ -18,14 +18,18 @@ class Vertex(Point):
     Attributes:
         x, y (float): 頂点座標値、infinite節点の場合はそれぞれ、infと設定される。
         infinite (bool): infinite節点であるときにTrue、それ以外の場合にはFalse
+        incident_facet (Facet): この節点を含む任意の代表Facet
 
     TODO:
         meshというAttributeが必要かどうか検討
     """
+    incident_facet: Facet | None
+
     def __init__(self, x: float, y: float, mesh: Triangulation = None, infinite: bool = False):
         super(Vertex, self).__init__(x, y)
         self.mesh = mesh
         self.infinite = infinite
+        self.incident_facet = None
 
 
 class Edge(Line[Vertex]):
@@ -74,14 +78,18 @@ class Facet(Triangle[Vertex]):
     """三角形メッシュFacetクラス
 
     Attributes:
-        vertices (List[Vertex]): メッシュ頂点の配列[v1, v2, v3]
         v1, v2, v3 (Vertex) : メッシュ頂点
     """
-    vertices: List[Vertex]
     mesh: Triangulation
 
     def __init__(self, v1, v2, v3, mesh: Triangulation = None):
         super(Facet, self).__init__(v1, v2, v3)
+
+        # Update vertex incident facet
+        v1.incident_facet = self
+        v2.incident_facet = self
+        v3.incident_facet = self
+
         self.mesh = mesh
 
     def get_edge(self, idx: int) -> Edge:
@@ -129,9 +137,11 @@ class Triangulation:
 
     Attributes:
         vertices (List[Vertex]): 頂点のリスト
-        triangles (List[Triangles]): 生成された三角形のリスト
+        triangles (List[Facet]): 生成された三角形のリスト
         edge_triangle_table (Dict[Edge,Triangle]): エッジをキーとしてそれに隣接する三角形をデータとした関係テーブル
     """
+    triangles: List[Facet]
+
     def __init__(self, vertices: List[Vertex]):
         self.edge_triangle_table = {}
         self.triangles = []
@@ -192,9 +202,7 @@ class Triangulation:
             tri = self.edge_triangle_table[base_edge]
         except KeyError:
             # step2
-            # if tri.is_infinite():
-                # tet_new = Tetrahedron(u, tri.v1, tri.v2, tri.v3, self)
-                # self.add_triangle()
+            # Triangle is already deleted
             return
 
         if tri.is_incircumcircle(u):
@@ -250,3 +258,24 @@ class Triangulation:
             triangles.append(tri)
 
         return triangles
+
+    def incident_faces(self, v: Vertex) -> List[Facet]:
+        """入力節点v周りのFacetをCCWで取得
+
+        Args:
+            v(Vertex): 入力節点
+
+        Returns:
+            List[Facet]: 入力節点v周りのFacetをCCWで取得
+        """
+        # circular search incident facet
+        fi = v.incident_facet
+        faces = [fi]
+        while True:
+            edge_idx = fi.vertices.index(v)
+            fi = self.edge_triangle_table[fi.get_edge(edge_idx).opposite()]
+            if fi == faces[0]:
+                break
+            faces.append(fi)
+
+        return faces

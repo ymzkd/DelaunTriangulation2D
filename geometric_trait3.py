@@ -36,6 +36,12 @@ class Vector:
     def __rmul__(self, other):
         return Vector(self.x * other, self.y * other, self.z * other)
 
+    def __truediv__(self, other) -> Vector:
+        if isinstance(other, (int, float)):
+            return Vector(self.x / other, self.y / other, self.z / other)
+        else:
+            raise ValueError(f'Only division by integer or float is allowed.({other})')
+
     def length(self) -> float:
         return math.sqrt(self.x**2 + self.y**2 + self.z**2)
 
@@ -52,6 +58,10 @@ class Vector:
             self.x * other.y - self.y * other.x
         )
         return new_vec
+
+    @classmethod
+    def zero(cls):
+        return cls(0.0, 0.0, 0.0)
 
 
 class Point(Vector):
@@ -313,3 +323,26 @@ class Tetrahedron(Generic[PointTrait, FacetTrait]):
 
     def volume(self) -> float:
         return abs(self.orient() / 6.0)
+
+    def edge_radius_ratio(self) -> float:
+        """半径-エッジ比の計算
+        この四面体の半径-エッジ比を計算する。
+
+        Returns:
+            float: この四面体の半径-エッジ比
+
+        Notes:
+            'Delaunay Mesh Generation' Chapter1 Definition 1.21
+            半径をr, 四面体の最短エッジ長さをlminとして半径-エッジ比は,r/lminとして得られ、
+            最小が正四面体の場合のsqrt(6)/4=0.612...である。
+        """
+        e1 = Line(self.v1, self.v2)
+        e2 = Line(self.v1, self.v3)
+        e3 = Line(self.v1, self.v4)
+        e4 = Line(self.v2, self.v3)
+        e5 = Line(self.v3, self.v4)
+        e6 = Line(self.v4, self.v2)
+        edges = [e1, e2, e3, e4, e5, e6]
+        lengths = [ei.length() for ei in edges]
+        sph = self.outer_sphere()
+        return sph.radius / min(lengths)

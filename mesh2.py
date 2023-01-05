@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import math
 from enum import Enum
-from typing import List, Union, Dict
+from typing import List, Union, Dict, Tuple
 
 import numpy as np
 
-from geometric_trait2 import Point, Line, Circle, Triangle
+from geometric_trait2 import Point, Line, Circle, Triangle, Vector
 
 TOLERANCE = 1.0e-12
 
@@ -43,13 +43,20 @@ class Vertex(Point):
         infinite (bool): この頂点がGhostVertex,すなわち無限遠であるならばTrue,そうでない場合はFalse
                          Meshに含まれるGhostVertexは1つのみである点に注意
         source (VertexSource): この頂点の属性データ。ユーザー指定、アルゴリズム自動生成などの属性を指定
-    """
+        incident_facet (Facet): この節点を含む任意の代表Facet
 
-    def __init__(self, x, y, mesh: Mesh = None, infinite: bool = False, source: VertexSource = VertexSource.fixed):
+    TODO:
+        meshというAttributeが必要かどうか検討,Triangulation後にちゃんとセットされていないと思われる。
+    """
+    incident_facet: Facet | None
+
+    def __init__(self, x, y, mesh: Mesh = None, infinite: bool = False,
+                 source: VertexSource = VertexSource.fixed):
         super(Vertex, self).__init__(x, y)
         self.mesh = mesh
         self.infinite = infinite
         self.source = source
+        self.incident_facet = None
 
 
 class Edge(Line[Vertex]):
@@ -170,7 +177,7 @@ class Segment(Edge):
 
         # どうやってこの線分自身の親線分をはじくか？
         segments = []
-        for si in self.mesh.segments:
+        for si in self.mesh.segments_all:
             adj = (si.v1 == tgt_vertex or si.v2 == tgt_vertex)
             if adj and (self not in si):
                 segments.append(si)
@@ -249,6 +256,26 @@ class Segment(Edge):
         else:
             return None
 
+    def incident_facets(self) -> tuple[Facet | None, Facet | None]:
+        """この線分の両側に位置するFacetを取得
+
+        Returns:
+            Facet: この線分の両側に位置するFacetを線分方向の左,右の順番で格納。
+                   線分側面にFacetが存在しない場合はNoneを返す。
+        TODO:
+            利用を意図していた内外判定部分では利用しなくなったので必要かを確認
+        """
+        facets = self.mesh.incident_faces(self.v1)
+        left, right = None, None
+        for fi in facets:
+            if self.v2 in fi.vertices:
+                idx1 = fi.vertices.index(self.v1)
+                if fi.vertices[(idx1 + 1) % 3] == self.v2:
+                    left = fi  # right side
+                else:
+                    right = fi  # left side
+        return left, right
+
 
 class Facet(Triangle[Vertex]):
     """一つの三角形メッシュ面
@@ -260,7 +287,7 @@ class Facet(Triangle[Vertex]):
     """
     vertices: List[Vertex]
 
-    def __init__(self, v1, v2, v3,
+    def __init__(self, v1: Vertex, v2: Vertex, v3: Vertex,
                  mesh: Mesh = None, locationtype = TriangleLocationType.undefined):
         super(Facet, self).__init__(v1, v2, v3)
 
@@ -268,7 +295,11 @@ class Facet(Triangle[Vertex]):
             if abs(self.area()) < 0.0000001:
                 raise ValueError(f"Triangle area is too small.[{self.area()}]\n{self}")
 
-        # self.vertices = [v1, v2, v3]
+        # Update vertex incident facet
+        v1.incident_facet = self
+        v2.incident_facet = self
+        v3.incident_facet = self
+
         self.mesh = mesh
         self.locationtype = locationtype
 
@@ -352,6 +383,17 @@ class Facet(Triangle[Vertex]):
             self.v2, self.v3 = self.v3, self.v2
 
     def edge_radius_ratio(self) -> float:
+        """半径-エッジ比の計算
+        この三角形の半径-エッジ比を計算する。
+
+        Returns:
+            float: この三角形の半径-エッジ比
+
+        Notes:
+            'Delaunay Mesh Generation' Chapter1 Definition 1.21
+            半径をr, 三角形の最短エッジ長さをlminとして半径-エッジ比は,r/lminとして得られ、
+            最小が正三角形の場合の1/sqrt(3)=0.577...である。
+        """
         rad = self.outer_circle().rad
         edge_length = []
         for i in range(3):
@@ -441,6 +483,31 @@ class Polyloop:
         for i in range(v_num):
             self.segments.append(Segment(vertices[i], vertices[(i+1)%v_num], mesh))
 
+    def __contains__(self, item):
+        for seg_i in self.segments:
+            if item in seg_i:
+                return True
+        else:
+            return False
+
+    @property
+    def count(self) -> int:
+        return len(self.vertices)
+
+    @property
+    def area(self) -> float:
+        """符号付き面積
+        符号付き面積計算の結果を返す。符号はCCWの場合に正、CWの場合に負となる。
+        Returns:
+            float: 符号付き面積
+        """
+        sum_cross = 0.0
+        for i in range(self.count):
+            vi = self.vertices[i]
+            vi1 = self.vertices[(i + 1) % self.count]
+            sum_cross += vi.outer_product(vi1)
+        return sum_cross * 0.5
+
 
 class Mesh:
     """三角形メッシュ生成・データの格納
@@ -455,16 +522,26 @@ class Mesh:
     triangles: List[Facet]
     vertices: List[Vertex]
     outerloop: Polyloop
+    innerloops: List[Polyloop]
     segments: List[Segment]
+    segments_all: List[Segment]
 
-    def __init__(self, vertices: List[Vertex], outerloop: Polyloop, p: float, maxiter: int = 500):
+    def __init__(self, vertices: List[Vertex], outerloop: Polyloop, p: float, innerloops: List[Polyloop] = [],
+                 segments: List[Segment] = [], maxiter: int = 500):
         # Step1 Initialize dates
         self.edge_triangle_table = {}
         self.triangles = []
         self.vertices = []
         self.outerloop = outerloop
-        self.segments = self.outerloop.segments
-        for seg_i in self.segments:
+        self.innerloops = innerloops
+        self.segments = [seg for seg in segments]
+        self.segments_all = [seg for seg in self.outerloop.segments]
+        for loop in innerloops:
+            self.segments_all.extend(loop.segments)
+
+        self.segments_all.extend(segments)
+
+        for seg_i in self.segments_all:
             seg_i.mesh = self
 
         # step2 Compute Del S
@@ -521,7 +598,7 @@ class Mesh:
             その他の場合はNoneを返す。
         """
         for vi in self.finite_vertices():
-            for seg_i in self.segments:
+            for seg_i in self.segments_all:
                 if vi is seg_i.v1 or vi is seg_i.v2:
                     continue
                 if s := seg_i.vertex_encroached(vi):
@@ -555,7 +632,7 @@ class Mesh:
         v = Vertex(c.center.x, c.center.y, mesh=self, source=VertexSource.auto)
 
         # 追加点にencroachが見つかった場合はsegmentを処理
-        for seg_i in self.segments:
+        for seg_i in self.segments_all:
             if s := seg_i.vertex_encroached(v):
                 segments = self.split_segment(s)
                 s.children = segments
@@ -579,7 +656,7 @@ class Mesh:
             vに接続される線分のリスト
         """
         segments = []
-        for si in self.segments:
+        for si in self.segments_all:
             if si.v1 == v or si.v2 == v:
                 segments.append(si)
         return segments
@@ -616,9 +693,7 @@ class Mesh:
             tri = self.edge_triangle_table[base_edge]
         except KeyError:
             # step2
-            # if tri.is_infinite():
-                # tet_new = Tetrahedron(u, tri.v1, tri.v2, tri.v3, self)
-                # self.add_triangle()
+            # Triangle is already deleted
             return
 
         if tri.is_incircumcircle(u):
@@ -733,51 +808,66 @@ class Mesh:
         return [vi for vi in self.vertices if not vi.infinite]
 
     def mark_inout(self):
-        """メッシュのFacetが領域内外情報を更新
+        """このやり方のmark_inoutならばいろんなループに対応できるかも"""
 
-        SegmentへのEncroachが解消された状態のメッシュにおいて、
-        メッシュのそれぞれのFacetが領域の内部にあるか外部にあるかの
-        情報を更新する。
-
-        Notes:
-            MeshでのEncroachの存在はあらかじめ解消しておく必要がある。
-        """
-        # Rough register
-        infinite_triangles = []
-        for ti in self.triangles:
-            if ti.is_infinite():
-                ti.locationtype = TriangleLocationType.outside
-                infinite_triangles.append(ti)
+        # 最初にfinite->inside, infinite->outsideに初期化
+        for tri in self.triangles:
+            if tri.is_infinite():
+                tri.locationtype = TriangleLocationType.outside
             else:
-                ti.locationtype = TriangleLocationType.inside
+                tri.locationtype = TriangleLocationType.inside
 
-        # Setup outside finite triangle register
-        outer_finite_triangles = set()
-        search_edge_que = []
-        for si in self.outerloop.segments:
-            for subsi in si.flatten_child():
-                bound_edge = subsi.opposite()
-                # すでにQueに追加したエッジが境界エッジだった場合は削除
-                if bound_edge in search_edge_que:
-                    search_edge_que.remove(bound_edge)
-                tri = self.edge_triangle_table[bound_edge]
-                if tri.is_infinite(): continue
-                if tri in outer_finite_triangles: continue # 三角形の重複登録を回避
+        # outer loopを処理
+        sub_segments = []
+        for seg in self.outerloop.segments:
+            sub_segments.extend(seg.flatten_child())
+        for seg in sub_segments:
+            self._mark_outside(seg, self.outerloop)
 
-                # 領域に外接する,三角形と探索エッジの登録
-                outer_finite_triangles.add(tri)
-                search_edges = [ei for ei in tri.edges if not ei == bound_edge]
-                search_edge_que.extend(search_edges)
+        # inner loopを処理
+        for loop in self.innerloops:
+            sub_segments = []
+            for seg in loop.segments:
+                sub_segments.extend(seg.flatten_child())
+            for seg in sub_segments:
+                self._mark_outside(seg, loop)
 
-        # Outside finite triangle search
-        while search_edge_que:
-            edge = search_edge_que.pop().opposite()
-            tri = self.edge_triangle_table[edge]
-            if tri.is_infinite(): continue
-            if tri in outer_finite_triangles: continue
-            outer_finite_triangles.add(tri)
-            search_edge_que.extend([ei for ei in tri.edges if not ei == edge])
+    def _mark_outside(self, e: Edge | Segment, loop: Polyloop):
+        # 隣接Facetは境界の内側
+        e_neigh = e.opposite()
+        if e_neigh in loop:
+            return
 
-        # Outside finite triangle register
-        for ti in outer_finite_triangles:
-            ti.locationtype = TriangleLocationType.outside
+        f_neigh = self.edge_triangle_table[e_neigh]
+        # 隣接Facetは調査済み
+        if f_neigh.locationtype == TriangleLocationType.outside:
+            return
+
+        f_neigh.locationtype = TriangleLocationType.outside
+        idx = f_neigh.vertices.index(e_neigh.v2)
+        e1 = f_neigh.get_edge(idx)
+        e2 = f_neigh.get_edge((idx + 1) % 3)
+        self._mark_outside(e1, loop)
+        self._mark_outside(e2, loop)
+
+    def incident_faces(self, v: Vertex) -> List[Facet]:
+        """節点v周りのFacetをCCWで取得
+
+        Args:
+            v(Vertex): 入力節点
+
+        Returns:
+            List[Facet]: 節点v周りのFacetのリスト
+        """
+        # circular search incident facet
+        fi = v.incident_facet
+        faces = [fi]
+        while True:
+            edge_idx = fi.vertices.index(v)
+            fi = self.edge_triangle_table[fi.get_edge(edge_idx).opposite()]
+            if fi == faces[0]:
+                break
+            faces.append(fi)
+
+        return faces
+

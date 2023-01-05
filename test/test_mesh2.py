@@ -1,6 +1,6 @@
 import pytest
 
-from mesh2 import Facet, Vertex, Segment
+from mesh2 import Facet, Vertex, Segment, Polyloop
 
 
 def test_segment_encroach():
@@ -20,6 +20,21 @@ def test_segment_encroach():
     assert s0.vertex_encroached(tgt_v1) == s2
     assert s0.vertex_encroached(tgt_v2) is None
     assert s0.vertex_encroached(tgt_v3) == s1
+
+
+def test_polyloop_area():
+    vertices = [
+        Vertex(4.504194, -0.536649),
+        Vertex(3.046386, -1.229997),
+        Vertex(2.441928, 0.174477),
+        Vertex(1.197458, 0.361147),
+        Vertex(1.36635, 1.97007),
+        Vertex(3.508618, 1.641174),
+        Vertex(3.337926, 0.337933)]
+
+    poly = Polyloop(vertices)
+
+    assert pytest.approx(poly.area) == -5.05364092
 
 
 def test_segment_contains():

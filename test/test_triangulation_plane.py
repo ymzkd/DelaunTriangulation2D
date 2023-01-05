@@ -1,6 +1,7 @@
 import pytest
 
-from triangulation_plane import Plane, Vertex, Vector, Edge, Facet, Sphere
+from mesh3 import Plane, Vertex, Edge, Facet, Sphere
+from geometric_trait3 import Vector
 
 
 def test_plane_initialize():
@@ -23,10 +24,10 @@ def test_plane_edge():
     pt_x = Vertex(1.0, 0.0, 0.0)
     pt_y = Vertex(0.0, 1.0, 0.0)
     e = Edge(pt_x, pt_y)
-    e.plane = Plane(origin, pt_x, pt_y)
+    pln = Plane(origin, pt_x, pt_y)
 
-    assert e.ispt_rightside(Vertex(2.0, 2.0, 0.0).toarray())
-    assert not(e.ispt_rightside(Vertex(0.1, 0.1, 0.0).toarray()))
+    assert e.ispt_rightside(Vertex(2.0, 2.0, 0.0), pln)
+    assert not(e.ispt_rightside(Vertex(0.1, 0.1, 0.0), pln))
 
 
 def test_plane_facet():

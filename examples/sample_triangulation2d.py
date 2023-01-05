@@ -7,4 +7,5 @@ point_cloud = np.random.random((100, 2))
 vertices = [tr.Vertex(i[0], i[1]) for i in point_cloud]
 
 trig = tr.Triangulation(vertices)
-dh.plot_triangulation(trig.finite_triangles())
+dh.plot_triangulation2d(trig)
+
