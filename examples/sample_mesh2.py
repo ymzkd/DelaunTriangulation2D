@@ -18,11 +18,27 @@ v6 = mesh2.Vertex(0.0, 0.6)
 v7 = mesh2.Vertex(0.0, 0.4)
 v8 = mesh2.Vertex(-0.3, 0.4)
 
+v9 = mesh2.Vertex(0.2, 0.2)
+v10 = mesh2.Vertex(0.2, 0.8)
+v11 = mesh2.Vertex(0.6, 0.8)
+v12 = mesh2.Vertex(0.6, 0.2)
+
+v13 = mesh2.Vertex(0.8, 0.7)  # y=0.7ならOK,それ以上の鋭角がダメそう
+# v13 = mesh2.Vertex(0.8, 0.8)  # このケースNG
+v14 = mesh2.Vertex(0.7, 0.2)
+v15 = mesh2.Vertex(0.9, 0.2)
+
 poly = mesh2.Polyloop([v1, v2, v3, v4, v5, v6, v7, v8])
+poly_in = mesh2.Polyloop([v9, v10, v11, v12])
 
-point_cloud = np.random.random((5, 2))
-vertices = [v1, v2, v3, v4, v5, v6, v7, v8]
-vertices += [mesh2.Vertex(i[0], i[1]) for i in point_cloud]
+# point_cloud = np.random.random((5, 2))
+vertices = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15]
 
-trig = mesh2.Mesh(vertices, poly, 1.5)
+seg1 = mesh2.Segment(v13, v14)
+seg2 = mesh2.Segment(v13, v15)
+
+# vertices += [mesh2.Vertex(i[0], i[1]) for i in point_cloud]
+
+# seg2を入れるとエラー
+trig = mesh2.Mesh(vertices, poly, 1.5, innerloops=[poly_in], segments=[seg1, seg2])
 dh.plot_mesh2(trig)

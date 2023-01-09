@@ -369,13 +369,13 @@ class Facet(Triangle[Vertex]):
     def is_infinite(self) -> bool:
         return any([vi.infinite for vi in self.vertices])
 
-    def orientation(self) -> float:
-        """
-        節点順がCCWであれば正、CWであれば負
-        """
-        mat = np.array([[self.v1.x - self.v3.x, self.v1.y - self.v3.y],
-                        [self.v2.x - self.v3.x, self.v2.y - self.v3.y]])
-        return np.linalg.det(mat)
+    # def orientation(self) -> float:
+    #     """
+    #     節点順がCCWであれば正、CWであれば負
+    #     """
+    #     mat = np.array([[self.v1.x - self.v3.x, self.v1.y - self.v3.y],
+    #                     [self.v2.x - self.v3.x, self.v2.y - self.v3.y]])
+    #     return np.linalg.det(mat)
 
     def fix_orientation(self):
         """節点順がCCWでなかった場合に節点順をCCWに修正"""
@@ -487,8 +487,7 @@ class Polyloop:
         for seg_i in self.segments:
             if item in seg_i:
                 return True
-        else:
-            return False
+        return False
 
     @property
     def count(self) -> int:
@@ -528,6 +527,16 @@ class Mesh:
 
     def __init__(self, vertices: List[Vertex], outerloop: Polyloop, p: float, innerloops: List[Polyloop] = [],
                  segments: List[Segment] = [], maxiter: int = 500):
+        """
+
+        Args:
+            vertices:
+            outerloop:
+            p(float): Facetの外接円半径-最短エッジ比の最大値を指定, sqrt(2)以上でアルゴリズム上終了することが保証されている。
+            innerloops:
+            segments:
+            maxiter:
+        """
         # Step1 Initialize dates
         self.edge_triangle_table = {}
         self.triangles = []

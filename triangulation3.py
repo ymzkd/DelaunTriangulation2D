@@ -5,12 +5,12 @@ from typing import List, Union, Dict
 
 import numpy as np
 
-from geometric_trait3 import Point, Triangle, Plane, Tetrahedron, Sphere, Line
+from geometric_trait3 import Point3, Triangle, Plane, Tetrahedron, Sphere, Line
 
 TOLERANCE = 1.0e-12
 
 
-class Vertex(Point):
+class Vertex(Point3):
     x: float
     y: float
     z: float
@@ -72,7 +72,7 @@ class Facet(Triangle):
         v = np.array(
             ((self.v1 * self.v1 - self.v2 * self.v2) * 0.5, (self.v1 * self.v1 - self.v3 * self.v3) * 0.5, pln.origin * pln.ez))
         mat = np.vstack(((self.v1 - self.v2).toarray(), (self.v1 - self.v3).toarray(), pln.ez.toarray()))
-        cent = Point(*np.linalg.solve(mat, v))
+        cent = Point3(*np.linalg.solve(mat, v))
         rad = (self.v1 - cent).length()
         return Sphere(cent, rad)
 

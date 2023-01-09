@@ -109,25 +109,6 @@ def plot_triangulation2d(tr: tr2.Triangulation):
             xy=points, closed=True, edgecolor='blue', fill=False)
         ax.add_patch(patch)
 
-    # segs = np.zeros((len(tr. segments), 2, 2))
-    # for i, si in enumerate(segments):
-    #     segs[i, 0, 0] = si.v1.x
-    #     segs[i, 0, 1] = si.v1.y
-    #     segs[i, 1, 0] = si.v2.x
-    #     segs[i, 1, 1] = si.v2.y
-    #
-    # if triangulate:
-    #     for tri_i in triangulate.triangles:
-    #         points = [[vi.x, vi.y] for vi in tri_i.vertices]
-    #         patch = patches.Polygon(
-    #             xy=points, closed=True, facecolor='white', edgecolor='black')
-    #         # patchs.append(patch)
-    #         ax.add_patch(patch)
-    #     plt.connect('motion_notify_event', motion)
-
-    # line_segments = LineCollection(segs, linewidths=(2), linestyle='solid', edgecolor='red', alpha=0.5)
-    # ax.add_collection(line_segments)
-
     ax.autoscale()
     ax.set_aspect('equal')
     plt.show()
@@ -254,75 +235,42 @@ def plot_mesh2(mesh: mesh2.Mesh):
     plotter.show()
 
 
-def plot_triangulation_plane(mesh: mesh3.TriangulationPlane):
+def plot_triangulationPLC(mesh: mesh3.TriangulationPLC):
     import pyvista as pv
     # mesh points
+    vertices = mesh.finite_vertices
     points = []
-    for vi in mesh.vertices:
+    for vi in vertices:
         points.append([vi.x, vi.y, vi.z])
-    vertices = np.array(points)
+    points = np.array(points)
 
     # mesh faces
     faces = []
-    rad_edge_ratios = []
-
-    # for ti in mesh.triangles:
     for ti in mesh.finite_triangles():
-        if ti.is_infinite():
+        if ti.location != mesh3.FacetLocationType.inside:
             continue
-        i1 = mesh.vertices.index(ti.v1)
-        i2 = mesh.vertices.index(ti.v2)
-        i3 = mesh.vertices.index(ti.v3)
-        faces.append([3,i1,i2,i3])
-        # rad_edge_ratios.append(ti.edge_radius_ratio())
+        i1 = vertices.index(ti.v1)
+        i2 = vertices.index(ti.v2)
+        i3 = vertices.index(ti.v3)
+        faces.append([3, i1, i2, i3])
     faces = np.hstack(faces)
     p = pv.Plotter()
 
     # Plot Vertex
     vertex_coords = []
-    for vi in mesh.vertices:
-        if vi.infinite: continue
+    for vi in vertices:
         vertex_coords.append(vi.toarray())
     p.add_mesh(pyvista.PointSet(vertex_coords))
 
-    # p.set_background("lightgray")
-    # p.add_mesh(grid1, show_edges=True, color='red')
-    # p.add_mesh(grid2, show_edges=True, opacity=0.6)
-
-    # for tri in mesh.triangles:
-    #     if tri.is_infinite():
-    #         for i in range(3):
-    #             edge = tri.get_edge(i)
-    #             if edge.is_infinite():
-    #                 continue
-    #             vec = (edge.v2 - edge.v1).toarray()
-    #             arrow = pv.Arrow(start=edge.v1.toarray(), direction=vec, scale='auto')
-    #             p.add_mesh(arrow)
-                # print("arrow added")
-
-    surf = pv.PolyData(vertices, faces)
+    surf = pv.PolyData(points, faces)
     shrunk = surf.shrink(0.98)
-    # plot each face with a different color
-    # surf.plot(cpos=[-1, 1, 0.5], show_edges=True, color=True)
-    # shrunk.plot(cpos=[[0,0,1],[0,0,0],[0,1,0]], show_edges=True, color=True, line_width=2.5, zoom='tight')
-    # shrunk.plot(cpos=[[0,0,1],[0,0,0],[0,1,0]], scalars=np.array(rad_edge_ratios), show_edges=True, color=True, line_width=2.5, zoom='tight')
     p.add_mesh(shrunk, show_edges=True, color=True, line_width=2.5)
-    # p.add_mesh(surf_cavity, show_edges=True, color=True, line_width=2.5)
-    # p.add_mesh(surf_cavity, show_edges=True, color='red', line_width=2.5)
     _ = p.show()
-    # _ = p.show(cpos=[[0,0,1],[0,0,0],[0,1,0]], zoom='tight')
+
 
 def plot_triangulation3(tri3: tr3.Triangulation3):
     import numpy as np
     import pyvista as pv
-    # from pyvista import CellType # CellType見つからない
-
-    # pdata = pv.PolyData(tri3.vertices)
-    # pdata['orig_sphere'] = np.arange(100)
-
-    # create many spheres from the point cloud
-    # sphere = pv.Sphere(radius=0.02, phi_resolution=10, theta_resolution=10)
-    # pc = pdata.glyph(scale=False, geom=sphere, orient=False)
 
     vertices = tri3.finite_vertices()
     points = np.array([[vi.x, vi.y, vi.z] for vi in vertices])
@@ -341,43 +289,52 @@ def plot_triangulation3(tri3: tr3.Triangulation3):
         count_finitecell += 1
 
     cells = np.hstack(cells)
-    # if len(cells) >= 1:
-    #     pass
-    # else:
-    #     cells = np.array(cells)
-    # if len(cells2) >= 1:
-    #     cells2 = np.hstack(cells2)
-    # else:
-    #     cells2 = np.array(cells2)
 
     # each cell is a HEXAHEDRON
     celltypes = np.empty(count_finitecell, dtype=np.uint8)
     celltypes[:] = 10
     grid1 = pv.UnstructuredGrid(cells, celltypes, points)
 
+    p = pv.Plotter()
+    p.set_background("lightgray")
+    p.add_mesh(grid1, scalars=np.array(rad_edge_ratios), show_edges=True, color='red')
+    _ = p.show()
+
+
+def plot_mesh3(mesh: mesh3.Mesh3):
+    import numpy as np
+    import pyvista as pv
+
+    vertices = mesh.finite_vertices()
+    points = np.array([[vi.x, vi.y, vi.z] for vi in vertices])
+    cells = []
+    # cells2 = []
+    rad_edge_ratios = []
+    count_finitecell = 0
+    for ti in mesh.finite_tetrahedrons():
+        if ti.location == mesh3.TetLocationType.outside:
+            continue
+        i1 = vertices.index(ti.v1)
+        i2 = vertices.index(ti.v2)
+        i3 = vertices.index(ti.v3)
+        i4 = vertices.index(ti.v4)
+        cells.append([4, i1, i2, i3, i4])
+        rad_edge_ratios.append(ti.edge_radius_ratio())
+        count_finitecell += 1
+
+    cells = np.hstack(cells)
+
     # each cell is a HEXAHEDRON
-    # celltypes = np.empty(len(tri3.tetrahedrons) - count_finitecell, dtype=np.uint8)
-    # celltypes[:] = 10
-    # grid2 = pv.UnstructuredGrid(cells2, celltypes, points)
+    celltypes = np.empty(count_finitecell, dtype=np.uint8)
+    celltypes[:] = 10
+    grid1 = pv.UnstructuredGrid(cells, celltypes, points)
 
     p = pv.Plotter()
     p.set_background("lightgray")
     p.add_mesh(grid1, scalars=np.array(rad_edge_ratios), show_edges=True, color='red')
-    # p.add_mesh(grid2, show_edges=True, opacity=0.6)
 
-    # Add Plane Widget
-    # def hello(normal, origin):
-    #     print("normal, origin: ", normal, origin)
-    #
-    # p.add_plane_widget(hello, origin=(0,0,0), bounds=(-10,10,-10,10,-10,10))
     _ = p.show()
 
-    # p = pv.Plotter()
-    # p.add_mesh(tet)
-    # p.add_mesh(pc, cmap='coolwarm')
-    # p.enable_shadows()
-    # p.show()
-    # pc.plot(cmap='Reds')
 
 def triangulation_statics(tess: tr2.Triangulation):
     evaluates = []

@@ -9,7 +9,7 @@ PointTrait = TypeVar("PointTrait")
 FacetTrait = TypeVar("FacetTrait")
 
 
-class Vector:
+class Vector3:
     def __init__(self, x: float, y: float, z: float):
         self.x = x
         self.y = y
@@ -19,26 +19,26 @@ class Vector:
         return np.array([self.x, self.y, self.z])
 
     def __add__(self, other):
-        return Vector(self.x + other.x, self.y + other.y, self.z + other.z)
+        return Vector3(self.x + other.x, self.y + other.y, self.z + other.z)
 
     def __sub__(self, other):
-        return Vector(self.x - other.x, self.y - other.y, self.z - other.z)
+        return Vector3(self.x - other.x, self.y - other.y, self.z - other.z)
 
     def __neg__(self):
-        return Vector(-self.x, -self.y, -self.z)
+        return Vector3(-self.x, -self.y, -self.z)
 
     def __mul__(self, other):
-        if isinstance(other, Vector):
+        if isinstance(other, Vector3):
             return self.x * other.x + self.y * other.y + self.z * other.z
         else:
-            return Vector(self.x * other, self.y * other, self.z * other)
+            return Vector3(self.x * other, self.y * other, self.z * other)
 
     def __rmul__(self, other):
-        return Vector(self.x * other, self.y * other, self.z * other)
+        return Vector3(self.x * other, self.y * other, self.z * other)
 
-    def __truediv__(self, other) -> Vector:
+    def __truediv__(self, other) -> Vector3:
         if isinstance(other, (int, float)):
-            return Vector(self.x / other, self.y / other, self.z / other)
+            return Vector3(self.x / other, self.y / other, self.z / other)
         else:
             raise ValueError(f'Only division by integer or float is allowed.({other})')
 
@@ -48,11 +48,11 @@ class Vector:
     def __str__(self):
         return f'({self.x}, {self.y}, {self.z})'
 
-    def outer_product(self, other: Vector):
+    def outer_product(self, other: Vector3):
         """
         外積
         """
-        new_vec = Vector(
+        new_vec = Vector3(
             self.y * other.z - self.z * other.y,
             self.z * other.x - self.x * other.z,
             self.x * other.y - self.y * other.x
@@ -64,7 +64,7 @@ class Vector:
         return cls(0.0, 0.0, 0.0)
 
 
-class Point(Vector):
+class Point3(Vector3):
     """メッシュ頂点クラス
 
     Attributes:
@@ -72,13 +72,13 @@ class Point(Vector):
     """
 
     def __init__(self, x: float, y: float, z: float):
-        super(Point, self).__init__(x, y, z)
+        super(Point3, self).__init__(x, y, z)
 
-    def distance(self, other: Point) -> float:
+    def distance(self, other: Point3) -> float:
         """他の頂点までの距離
 
         Args:
-            other (Point): 計算対象の頂点
+            other (Point3): 計算対象の頂点
 
         Returns:
             float: 距離
@@ -102,7 +102,7 @@ class Line(Generic[PointTrait]):
     def length(self) -> float:
         return self.v1.distance(self.v2)
 
-    def direction(self) -> Vector:
+    def direction(self) -> Vector3:
         return self.v2 - self.v1
 
     def __hash__(self):
@@ -116,14 +116,14 @@ class Line(Generic[PointTrait]):
 
 
 class Sphere:
-    center: Point
+    center: Point3
     radius: float
 
-    def __init__(self, center: Point, radius: float):
+    def __init__(self, center: Point3, radius: float):
         self.center = center
         self.radius = radius
 
-    def isinside(self, v: Point, delta=1.0e-06) -> bool:
+    def isinside(self, v: Point3, delta=1.0e-06) -> bool:
         d1 = self.center.distance(v)
         return d1 < (self.radius - delta)  # TODO: ここで少し引かないと開球の内部判定にならないときあり
 
@@ -133,7 +133,7 @@ class Plane:
     平面。というか局所座標系になりつつある。
     """
 
-    def __init__(self, origin: Point, pt_x: Point, pt_y: Point):
+    def __init__(self, origin: Point3, pt_x: Point3, pt_y: Point3):
         ex = pt_x - origin
         ex *= 1.0 / ex.length()
         ey = pt_y - origin
@@ -159,11 +159,11 @@ class Plane:
         mat[0:3, 3] = self.origin.toarray()
         return mat
 
-    def signed_distance(self, pt: Point) -> float:
+    def signed_distance(self, pt: Point3) -> float:
         """平面から入力点ptまでの符号付き距離
 
         Args:
-            pt (Point): 距離を計測する基準点
+            pt (Point3): 距離を計測する基準点
 
         Returns:
             float: 平面から点までの符号付き距離、法線方向が正で逆方向が負
@@ -209,12 +209,12 @@ class Triangle(Generic[PointTrait]):
         cross = np.cross(v12, v13)
         return np.linalg.norm(cross) * 0.5
 
-    def normal(self) -> Vector:
+    def normal(self) -> Vector3:
         v12 = (self.v2 - self.v1).toarray()
         v13 = (self.v3 - self.v1).toarray()
         cross = np.cross(v12, v13)
         normal = cross / np.linalg.norm(cross)
-        return Vector(normal[0], normal[1], normal[2])
+        return Vector3(normal[0], normal[1], normal[2])
 
     def plane(self) -> Plane:
         return Plane(self.v1, self.v2, self.v3)
@@ -224,7 +224,7 @@ class Triangle(Generic[PointTrait]):
         v = np.array(
             ((self.v1 * self.v1 - self.v2 * self.v2) * 0.5, (self.v1 * self.v1 - self.v3 * self.v3) * 0.5, pln.origin * pln.ez))
         mat = np.vstack(((self.v1 - self.v2).toarray(), (self.v1 - self.v3).toarray(), pln.ez.toarray()))
-        cent = Point(*np.linalg.solve(mat, v))
+        cent = Point3(*np.linalg.solve(mat, v))
         rad = (self.v1 - cent).length()
         return Sphere(cent, rad)
 
@@ -304,7 +304,7 @@ class Tetrahedron(Generic[PointTrait, FacetTrait]):
              self.v3.length() ** 2 - self.v4.length() ** 2]
         )
         center = np.linalg.solve(mA, vb)
-        center = Point(center[0], center[1], center[2])
+        center = Point3(center[0], center[1], center[2])
         rad = np.linalg.norm(self.v1.toarray() - center.toarray())
         return Sphere(center, rad)
 
