@@ -39,7 +39,7 @@ vertices = [v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11]
 # random.shuffle(vertices)
 polygons = [pl1, pl2, pl3, pl4, pl5, pl6, pl7, pl8]
 
-trig = mesh3.Mesh3(vertices, polygons, 1.4)
+trig = mesh3.Mesh3(vertices, polygons, 2.2)
 # for tri in trig.plc_triangulations:
 #     dh.plot_triangulationPLC(tri)
 

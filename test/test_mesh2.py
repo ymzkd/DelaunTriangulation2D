@@ -1,6 +1,6 @@
 import pytest
 
-from mesh2 import Facet, Vertex, Segment, Polyloop
+from mesh2 import Facet, Vertex, Segment, Polyloop, Mesh
 
 
 def test_segment_encroach():
@@ -84,3 +84,26 @@ def test_segment_flatten():
 
     assert all([ts == es for ts, es in zip(s0.flatten_child(), expected_segments)])
 
+
+def test_segment_cluster():
+    v0 = Vertex(0.0, 0.0)
+    v1 = Vertex(4.0, 1.0)
+    v2 = Vertex(4.0, 4.0)
+    v3 = Vertex(2.0, 4.0)
+    v4 = Vertex(-4.0, 1.0)
+    v5 = Vertex(-5.0, -1.0)
+    v6 = Vertex(-1.0, -3.0)
+    v7 = Vertex(3.0, -1.0)
+    seg1 = Segment(v0, v1)
+    seg2 = Segment(v0, v2)
+    seg3 = Segment(v0, v3)
+    seg4 = Segment(v0, v4)
+    seg5 = Segment(v0, v5)
+    seg6 = Segment(v0, v6)
+    seg7 = Segment(v0, v7)
+
+    seg = seg2
+    segments = [seg1, seg2, seg3, seg4, seg5, seg6, seg7]
+
+    cluster = Mesh.cluster_from_segments(seg, v0, segments)
+    assert len(cluster) == 4

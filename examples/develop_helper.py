@@ -98,16 +98,16 @@ def plot_triangulation2d(tr: tr2.Triangulation):
         ax.add_patch(patch)
 
     # Plot Voronoi
-    for vi in tr.vertices:
-        triangles = tr.incident_faces(vi)
-        if any(tri.is_infinite() for tri in triangles):
-            continue
-
-        vertices = [tri.outer_circle().center for tri in triangles]
-        points = [[vi.x, vi.y] for vi in vertices]
-        patch = patches.Polygon(
-            xy=points, closed=True, edgecolor='blue', fill=False)
-        ax.add_patch(patch)
+    # for vi in tr.vertices:
+    #     triangles = tr.incident_faces(vi)
+    #     if any(tri.is_infinite() for tri in triangles):
+    #         continue
+    #
+    #     vertices = [tri.outer_circle().center for tri in triangles]
+    #     points = [[vi.x, vi.y] for vi in vertices]
+    #     patch = patches.Polygon(
+    #         xy=points, closed=True, edgecolor='blue', fill=False)
+    #     ax.add_patch(patch)
 
     ax.autoscale()
     ax.set_aspect('equal')

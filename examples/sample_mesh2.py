@@ -23,8 +23,8 @@ v10 = mesh2.Vertex(0.2, 0.8)
 v11 = mesh2.Vertex(0.6, 0.8)
 v12 = mesh2.Vertex(0.6, 0.2)
 
-v13 = mesh2.Vertex(0.8, 0.7)  # y=0.7ならOK,それ以上の鋭角がダメそう
-# v13 = mesh2.Vertex(0.8, 0.8)  # このケースNG
+# v13 = mesh2.Vertex(0.8, 0.7)  # y=0.7ならOK,それ以上の鋭角がダメそう
+v13 = mesh2.Vertex(0.8, 0.8)  # このケースNG
 v14 = mesh2.Vertex(0.7, 0.2)
 v15 = mesh2.Vertex(0.9, 0.2)
 
@@ -39,6 +39,5 @@ seg2 = mesh2.Segment(v13, v15)
 
 # vertices += [mesh2.Vertex(i[0], i[1]) for i in point_cloud]
 
-# seg2を入れるとエラー
 trig = mesh2.Mesh(vertices, poly, 1.5, innerloops=[poly_in], segments=[seg1, seg2])
 dh.plot_mesh2(trig)

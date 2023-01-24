@@ -72,7 +72,7 @@ class Edge3(Line[Vertex3]):
         return (pln.ez.toarray() @ np.cross(vav, vab)) > 1.0e-6
 
     def distance_inplane(self, pt: Point3, pln: Plane) -> float:
-        """入力点の入力平面上でのこのエッジとの距離
+        """入力点の入力平面上でのこのエッジとの符号付き距離
 
         Args:
             pt (Point3): 節点座標を表す三次元のベクトル
@@ -283,13 +283,14 @@ class Facet3(Triangle):
     def infinite_is_incircumball(self, v: Vertex3, delta=1.0e-06) -> bool:
         # 節点が半平面に位置するか？
         vid_inf = [v.infinite for v in self.vertices].index(True)
-        seg = self.get_edge((vid_inf + 1) % 3)
+        edge = self.get_edge((vid_inf + 1) % 3)
 
-        dist = seg.distance_inplane(v, self.mesh.plane)
+        dist = edge.distance_inplane(v, self.mesh.plane)
         if dist < -delta:
+            # 内側開集合
             return True
         else:
-            ball = seg.diametric_ball()
+            ball = edge.diametric_ball()
             return abs(dist) < delta and ball.isinside(v, delta)
 
         # dist = fi.plane().signed_distance(v)
@@ -416,7 +417,7 @@ class Polygon3:
 
 class Mesh3:
     """PLCの四面体分割
-    DelTetPLC 'Tetrahedral meshing of PLCs'によるPLCの四面体分割
+    DelTetPLC "Tetrahedral meshing of PLCs"によるPLCの四面体分割
 
     Notes:
             'Delaunay Mesh Generation' page 175
@@ -467,9 +468,10 @@ class Mesh3:
         self.resolve_face_encroach()
         for tri in self.plc_triangulations:
             tri.mark_inout()
+        self.mark_inout()
 
         # Step5 refine tetrahedron
-        self.mark_inout()
+        self.refine_tetra()
 
     def triangulate(self, vertices: List[Vertex3]):
         insert_vertices = copy.copy(vertices)
@@ -638,30 +640,54 @@ class Mesh3:
         return None
 
     def resolve_face_encroach(self):
+        """PLCへのencroachを逐次的に解消する。
+
+        Notes:
+            この関数が呼ばれる前にsegmentのencroachを解消しておく必要がある。
+        """
         while f := self.pick_face_encroach():
             # segmentのencroachが優先なので、facetの重心がsegmentをencroachしていないか調べる
             new_pt = f.diametric_ball().center
-            if seg := self.segment_encroach(new_pt):
-                segments = self.split_segment(seg)
-                seg.children = segments
-                # segmentをencroachしていたらsegmentのencroachを解消して再度ループ
-                #   - Segment分割
-                #   - 各PLCのTriangulationに分割点を挿入
-                #   - 全体のTriangulationに分割点を挿入
-            else:
-                trig_pln = f.mesh
-                vertex = Vertex3(new_pt.x, new_pt.y, new_pt.z)
-                # それ以外の場合はfacetのencroachを以下で解消
-                # encroachが見つかったfaceの属する平面Triangulationにfacetの重心を追加
-                trig_pln.add_vertex(vertex)
-                # facetの重心を全体のTriangulationにも追加
-                self.add_vertex(vertex)
+            trig_pln = f.mesh
+            vertex = Vertex3(new_pt.x, new_pt.y, new_pt.z)
+            # それ以外の場合はfacetのencroachを以下で解消
+            # encroachが見つかったfaceの属する平面Triangulationにfacetの重心を追加
+            trig_pln.add_vertex(vertex)
+            # facetの重心を全体のTriangulationにも追加
+            self.add_vertex(vertex)
+
+            self.resolve_segment_encroach()
+
+    def refine_tetra(self):
+        """クライテリアを満たさない四面体を改良するために節点を追加
+
+        Notes:
+            この関数が呼ばれる前にsegment,PLCのencroachを解消しておく必要がある。
+        """
+        while t := self.pick_bad_tetra():
+            # step1
+            sph = t.outer_sphere()
+            self.add_vertex(Vertex3(sph.center.x, sph.center.y, sph.center.z))
+
+            self.resolve_segment_encroach()
+            self.resolve_face_encroach()
+            for tri in self.plc_triangulations:
+                tri.mark_inout()
+            self.mark_inout()
 
     def pick_face_encroach(self) -> Facet3 | None:
         for vi in self.finite_vertices():
             for tri_i in self.plc_triangulations:
                 if fc_i := tri_i.encroached_facet(vi):
                     return fc_i
+        return None
+
+    def pick_bad_tetra(self) -> TetCell3 | None:
+        for ti in self.tetrahedrons:
+            if ti.location != TetLocationType.inside:
+                continue
+            if ti.edge_radius_ratio() > self.p:
+                return ti
         return None
 
     def mark_inout(self):

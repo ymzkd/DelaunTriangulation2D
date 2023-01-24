@@ -23,3 +23,7 @@ pip uninstall triangulation
 
 ### 修正事項
 - triangulation2dにおいてVertexのメンバーにTriangulation自身が含まれるが、実際は上手く設定できていないので機能していなさそう。要調査・修正
+
+## Reference
+1. [Mesh generation for domains with small angles, Shewchuk et.al.](https://dl.acm.org/doi/10.1145/336154.336163)
+2. [Delaunay Mesh Generation, Shewchuk, Cheng et.al.](https://dl.acm.org/doi/10.5555/2422925)

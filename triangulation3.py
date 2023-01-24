@@ -39,8 +39,8 @@ class Facet(Triangle):
     def is_infinite(self) -> bool:
         return any([self.v1.infinite, self.v2.infinite, self.v3.infinite])
 
-    def plane(self) -> Plane:
-        return Plane(self.v1, self.v2, self.v3)
+    # def plane(self) -> Plane:
+    #     return Plane(self.v1, self.v2, self.v3)
 
     def point_at(self, v0: Vertex) -> List[float]:
         vec02 = self.v2 - v0

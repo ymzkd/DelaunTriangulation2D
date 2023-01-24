@@ -68,6 +68,20 @@ class Edge(Line[Vertex]):
     def opposite(self) -> Edge:
         return Edge(self.v2, self.v1, self.mesh)
 
+    @property
+    def midpt(self) -> Vertex:
+        x = (self.v1.x + self.v2.x) * 0.5
+        y = (self.v1.y + self.v2.y) * 0.5
+        return Vertex(x, y, mesh=self.mesh)
+
+    def diametric_ball(self) -> Circle:
+        """線分を直径とした円を生成
+
+        Returns:
+            Circle: 線分を直径とした円
+        """
+        return Circle(self.midpt, self.length() * 0.5)
+
 
 class Segment(Edge):
     """2つの節点を結ぶ線分
@@ -118,7 +132,8 @@ class Segment(Edge):
             return None
 
         cir = self.diametric_ball()
-        if cir.ispoint_inside([v.x, v.y]):
+        # if cir.ispoint_inside([v.x, v.y]):
+        if cir.ispoint_inside(v):
             if self.children:
                 for seg_i in self.children:
                     if s := seg_i.vertex_encroached(v):
@@ -286,12 +301,13 @@ class Facet(Triangle[Vertex]):
         locationtype (TriangleLocationType): このFacetがメッシュの領域内部にあるか、外部に属するかの属性
     """
     vertices: List[Vertex]
+    locked: bool
 
     def __init__(self, v1: Vertex, v2: Vertex, v3: Vertex,
-                 mesh: Mesh = None, locationtype = TriangleLocationType.undefined):
+                 mesh: Mesh = None, locationtype = TriangleLocationType.undefined, force_create: bool=False):
         super(Facet, self).__init__(v1, v2, v3)
 
-        if not self.is_infinite():
+        if not(self.is_infinite() or force_create):
             if abs(self.area()) < 0.0000001:
                 raise ValueError(f"Triangle area is too small.[{self.area()}]\n{self}")
 
@@ -302,6 +318,7 @@ class Facet(Triangle[Vertex]):
 
         self.mesh = mesh
         self.locationtype = locationtype
+        self.locked = False
 
     @property
     def edges(self) -> List[Edge]:
@@ -332,7 +349,8 @@ class Facet(Triangle[Vertex]):
         else:
             # 三角形外接円に節点が含まれるか？
             cir = self.outer_circle()
-            return cir.ispoint_inside(v.toarray())
+            return cir.ispoint_inside(v)
+            # return cir.ispoint_inside(v.toarray())
 
     def __infinite_is_incircumcircle(self, v: Vertex, delta=0.0001) -> bool:
         """infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置するか？
@@ -351,20 +369,14 @@ class Facet(Triangle[Vertex]):
 
         vid_inf = [v.infinite for v in self.vertices].index(True)
         edge = self.get_edge((vid_inf + 1) % 3)
-        v12 = edge.direction().toarray()
-        ev12 = v12 / np.linalg.norm(v12)
-        vw = (v - edge.v1).toarray()
-        v12d = np.dot(vw, ev12) * ev12
-        t = np.dot(v12, v12d) / np.dot(v12, v12)
-        dw = vw - v12d
 
-        if 0.0 < t < 1.0:
-            dt = delta * (1.0 - abs((t - 0.5) * 2.0))
+        dist = edge.direction().outer_product(v - edge.v1) * 0.5 / edge.length()  # 内が正
+        if dist > delta:
+            # 内側開集合
+            return True
         else:
-            dt = -delta
-
-        # print(np.cross(ev12, dw), t, dt)
-        return np.cross(ev12, dw) > -dt
+            ball = edge.diametric_ball()
+            return abs(dist) < delta and ball.ispoint_inside(v, delta)
 
     def is_infinite(self) -> bool:
         return any([vi.infinite for vi in self.vertices])
@@ -568,7 +580,8 @@ class Mesh:
                 print("iteration reach max iteration.")
                 break
             if tri:
-                self.split_triangle(tri)
+                self.split_triangle2(tri)
+                # self.split_triangle(tri)
             else:
                 break
 
@@ -579,10 +592,17 @@ class Mesh:
         gv = Vertex(math.inf, math.inf, infinite=True, source=VertexSource.auto)
         v1 = vertices.pop()
         v2 = vertices.pop()
-        v3 = vertices.pop()
+        # v3 = vertices.pop()
 
-        t1 = Facet(v1, v2, v3, mesh=self)
-        t1.fix_orientation()
+        v3 = None; t1 = None
+        for v in vertices:
+            v3 = v
+            t1 = Facet(v1, v2, v3, mesh=self, force_create=True)
+            if abs(t1.area()) > 1.0e-6:
+                t1.fix_orientation()
+                vertices.remove(v3)
+                break
+
         gt1 = Facet(gv, t1.v2, t1.v1)
         gt2 = Facet(gv, t1.v3, t1.v2)
         gt3 = Facet(gv, t1.v1, t1.v3)
@@ -630,7 +650,9 @@ class Mesh:
         """
         for tri_i in self.finite_triangles():
             if tri_i.is_seditious():
-                print("find seditious")
+                # print("find seditious")
+                continue
+            if tri_i.locked:
                 continue
             if tri_i.locationtype == TriangleLocationType.inside and tri_i.edge_radius_ratio() > re_rate:
                 return tri_i
@@ -645,14 +667,84 @@ class Mesh:
             if s := seg_i.vertex_encroached(v):
                 segments = self.split_segment(s)
                 s.children = segments
-                # TODO: この後の処理はなんとなく実装しているので要確認
                 self.resolve_encroach()
                 self.mark_inout()
                 return
 
         # FacetのCircumCenterを挿入
         self.add_vertex(v)
-        self.resolve_encroach()
+        # self.resolve_encroach() # FIX: vはencroachしていないので不要かと
+        self.mark_inout()
+
+    def split_triangle2(self, tri: Facet):
+        cluster = tri.outer_circle()
+        v = Vertex(cluster.center.x, cluster.center.y, mesh=self, source=VertexSource.auto)
+
+        # 追加点にencroachが見つかった場合はsegmentを処理
+        for seg_i in self.segments_all:
+            if s := seg_i.vertex_encroached(v):
+                # Better Algorithmの判定を追加
+                # 1. 両端がsegmentの交点か？
+                et = s.encroach_type()
+                if et is None:
+                    # 中間線分なので分割
+                    segments = self.split_segment(s)
+                    s.children = segments
+                    self.resolve_encroach()
+                    self.mark_inout()
+                    return
+                if et == SegmentPosition.both:
+                    # 分割ただしバランスを見た分割
+                    segments = self.split_segment(s)
+                    s.children = segments
+                    self.resolve_encroach()
+                    self.mark_inout()
+                    return
+                # 2. segment clusterを取得
+                if et == SegmentPosition.iend:
+                    v = s.v1
+                elif et == SegmentPosition.jend:
+                    v = s.v2
+                if cluster := self.segment_cluster(s, v):
+                    if len(cluster) == 1:
+                        segments = self.split_segment(s)
+                        s.children = segments
+                        self.resolve_encroach()
+                        self.mark_inout()
+                        return
+                    shells = self.cshell_segments(cluster)
+                    if any([i != shells[0] for i in shells]):
+                        # clusterの長さが異なる場合は分割
+                        segments = self.split_segment(s)
+                        s.children = segments
+                        self.resolve_encroach()
+                        self.mark_inout()
+                        return
+
+                angles = []
+                # 3. insert radiusとr_minを比較
+                for i in range(1, len(cluster)):
+                    s1 = cluster[i - 1]
+                    s2 = cluster[i]
+                    angles.append(s1.angle_segment(s2, v))
+                min_angle = min(angles)
+                r_min = 2.0 * math.sin(min_angle*0.5) * s.length()
+                r_ins = min([e.length() for e in tri.edges])
+                if r_min >= r_ins:
+                    print("r_min >= r_ins")
+                    segments = self.split_segment(s)
+                    s.children = segments
+                    self.resolve_encroach()
+                    self.mark_inout()
+                    return
+
+                # 挿入の取りやめ
+                tri.locked = True
+                return
+
+        # FacetのCircumCenterを挿入
+        self.add_vertex(v)
+        # self.resolve_encroach() # FIX: vはencroachしていないので不要かと
         self.mark_inout()
 
     def adjacent_segments(self, v: Vertex) -> List[Segment]:
@@ -715,6 +807,60 @@ class Mesh:
         else:
             self.add_triangle(Facet(u, edge.v1, edge.v2, mesh=self))
 
+    def segment_cluster(self, s: Segment, v: Vertex) -> List[Segment]:
+        incident_seg = []
+        for si in self.segments:
+            for sj in si.flatten_child():
+                if sj.v1 == v or sj.v2 == v:
+                    incident_seg.append(sj)
+        return self.cluster_from_segments(s, v, incident_seg)
+
+    @staticmethod
+    # Input Segments, TGTSegment
+    def cluster_from_segments(seg, v, segments):
+        fixdir = lambda x: math.pi * 2 + x if x < 0.0 else x
+
+        # collect angles
+        angles = []
+        for si in segments:
+            d = si.direction_from_pivot(v)
+            angles.append(fixdir(math.atan2(d[1], d[0])))
+
+        # sorted by angle
+        result = [i for _, i in sorted(zip(angles, segments))]
+        iseg = result.index(seg)
+        angles.sort()
+
+        # collect clusters
+        cluster = [seg]
+        segment_num = len(result)
+
+        delta_angles = [angles[i] - angles[i - 1] for i in range(1, segment_num)]
+        delta_angles.append(angles[0] + math.pi * 2 - angles[-1])
+
+        for i in range(segment_num):
+            i1 = (i + iseg) % segment_num
+            i2 = (i + iseg + 1) % segment_num
+            diff = delta_angles[i1]
+            if diff < math.pi / 3:
+                cluster.append(result[i2])
+            else:
+                last_ind = i
+                break
+        else:
+            last_ind = segment_num
+
+        for i in range(segment_num - last_ind):
+            i1 = (iseg - i)
+            i2 = (iseg - i - 1)
+            diff = delta_angles[i2]
+            if diff < math.pi / 3:
+                cluster.insert(0, result[i2])
+            else:
+                break
+
+        return cluster
+
     def add_vertex(self, v: Vertex) -> None:
         """頂点vを挿入
 
@@ -745,6 +891,14 @@ class Mesh:
         self.edge_triangle_table[e3] = tri
         self.triangles.append(tri)
 
+    @staticmethod
+    def cshell(l: float) -> int:
+        return int(math.floor(math.log(l) / math.log(2.0)))
+
+    @staticmethod
+    def cshell_segments(segments: List[Segment]) -> List[int]:
+        return [Mesh.cshell(si.length()) for si in segments]
+
     def split_segment(self, seg: Segment) -> List[Segment]:
         """encroachしている線分を分割
 
@@ -765,14 +919,16 @@ class Mesh:
 
         # 両端が鋭角の場合の線分分割
         if acute_pos == SegmentPosition.both:
-            i1 = int(math.floor(math.log(seg.length() / 2) / math.log(2.0)))
-            dl1 = 2.0 ** i1
+            # i1 = self.cshell(seg.length() / 2)
+            # int(math.floor(math.log(seg.length() / 2) / math.log(2.0)))
+            dl1 = 2.0 ** self.cshell(seg.length() / 2)
             vec = axis * dl1
             pt1 = Vertex(seg.v1.x + vec[0], seg.v1.y + vec[1], self, source=VertexSource.auto)
 
             length2 = seg.length() * 4 / 5 - dl1
-            i2 = int(math.floor(math.log(length2) / math.log(2.0)))
-            dl2 = 2.0 ** i2
+            # i2 = self.cshell(length2)
+            # int(math.floor(math.log(length2) / math.log(2.0)))
+            dl2 = 2.0 ** self.cshell(length2)
             vec = -axis * dl2
             pt2 = Vertex(seg.v2.x + vec[0], seg.v2.y + vec[1], self, source=VertexSource.auto)
 
@@ -784,8 +940,9 @@ class Mesh:
             return [seg1, seg2, seg3]
 
         # 一端が鋭角の場合の線分分割
-        i = int(math.floor(math.log(seg.length() / 1.5) / math.log(2.0)))
-        dl = 2.0**i
+        # i = self.cshell(seg.length() / 1.5)
+        # int(math.floor(math.log(seg.length() / 1.5) / math.log(2.0)))
+        dl = 2.0**self.cshell(seg.length() / 1.5)
         if acute_pos is None:
             mid_pt = seg.midpt
         elif acute_pos == SegmentPosition.iend:

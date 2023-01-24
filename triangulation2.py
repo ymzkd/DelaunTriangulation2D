@@ -55,6 +55,20 @@ class Edge(Line[Vertex]):
         """
         return Edge(self.v2, self.v1, self.mesh)
 
+    @property
+    def midpt(self) -> Vertex:
+        x = (self.v1.x + self.v2.x) * 0.5
+        y = (self.v1.y + self.v2.y) * 0.5
+        return Vertex(x, y, mesh=self.mesh)
+
+    def diametric_ball(self) -> Circle:
+        """線分を直径とした円を生成
+
+        Returns:
+            Circle: 線分を直径とした円
+        """
+        return Circle(self.midpt, self.length() * 0.5)
+
 
 class CircumCircle(Circle):
     """中心と半径で定義された円
@@ -114,14 +128,41 @@ class Facet(Triangle[Vertex]):
             節点vがこの三角形の内部に位置する場合はTrue, その他の場合はFalse
         """
         if self.is_infinite():
+            return self.__infinite_is_incircumcircle(v, 0.000001)
             # 節点が半平面に位置するか？
-            vid_inf = [v.infinite for v in self.vertices].index(True)
-            seg = self.get_edge((vid_inf + 1) % 3)
-            return not(seg.ispt_rightside(v.toarray()))
+            # vid_inf = [v.infinite for v in self.vertices].index(True)
+            # seg = self.get_edge((vid_inf + 1) % 3)
+            # return not(seg.ispt_rightside(v.toarray()))
         else:
             # 三角形外接円に節点が含まれるか？
             cir = self.outer_circle()
-            return cir.ispoint_inside(v.toarray())
+            return cir.ispoint_inside(v)
+
+    def __infinite_is_incircumcircle(self, v: Vertex, delta=0.0001) -> bool:
+        """infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置するか？
+
+        infinite triangle(ghost triangle)に対して節点vがその外接円内部に位置する場合はTrue,
+        そうでない場合はFalseを返す。ただし、外接円内部になりやすいように微小許容幅をとることも
+        考慮し、delta >= 0 とした微小値を設定することができる。
+
+        Args:
+            v (Vertex): 外接円内部判定対象の節点
+            delta (float): 外接円内部になりやすいような許容幅. delta>=0
+
+        Returns:
+            bool: 節点vが三角形の外接円内部の場合はTrue, そうでない場合はFalse
+        """
+
+        vid_inf = [v.infinite for v in self.vertices].index(True)
+        edge = self.get_edge((vid_inf + 1) % 3)
+
+        dist = edge.direction().outer_product(v - edge.v1) * 0.5 / edge.length()  # 内が正
+        if dist > delta:
+            # 内側開集合
+            return True
+        else:
+            ball = edge.diametric_ball()
+            return abs(dist) < delta and ball.ispoint_inside(v, delta)
 
     def is_infinite(self) -> bool:
         return any([vi.infinite for vi in self.vertices])

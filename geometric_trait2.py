@@ -147,8 +147,9 @@ class Circle:
         self.center = center
         self.rad = rad
 
-    def ispoint_inside(self, pt) -> bool:
-        return (pt[0] - self.center.x)**2 + (pt[1] - self.center.y)**2 <= self.rad**2
+    def ispoint_inside(self, pt: Point, delta=1.0e-06) -> bool:
+        d1 = self.center.distance(pt)
+        return d1 < (self.rad - delta)
 
 
 class Triangle(Generic[PointTrait]):
